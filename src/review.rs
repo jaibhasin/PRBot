@@ -5,10 +5,13 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::github::{GitHubClient, GitHubUser, IssueComment};
+use crate::github::{GitHubClient, GitHubUser, IssueComment, PullRequestFile};
 
 const OPENROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const OPENROUTER_MODEL: &str = "deepseek/deepseek-v4-flash";
+const MAX_REVIEW_FILES: usize = 25;
+const MAX_REVIEW_PATCH_CHARS: usize = 80_000;
+const MAX_FINDINGS: usize = 12;
 
 /// Arguments for the `review` command.
 #[derive(Debug, Parser)]
@@ -125,12 +128,217 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
             comment.id, posted.id, reply.reaction
         );
     } else {
-        let prompt = format!("Review pull request {repository}#{pr_number}.");
-        let response = call_openrouter(api_key, &prompt).await?;
-        println!("OpenRouter response: {response}");
+        run_code_quality_review(&github, api_key, &repository, pr_number).await?;
     }
 
     Ok(())
+}
+
+async fn run_code_quality_review(
+    github: &GitHubClient,
+    api_key: &str,
+    repository: &str,
+    pr_number: u64,
+) -> Result<()> {
+    let files = github.list_pull_request_files(pr_number).await?;
+    let selected_files = select_review_files(&files);
+    if selected_files.is_empty() {
+        println!("No reviewable source changes found in {repository}#{pr_number}");
+        return Ok(());
+    }
+
+    let prompt = build_code_quality_prompt(repository, pr_number, &selected_files);
+    let raw_response = call_openrouter(api_key, &prompt).await?;
+    let findings = parse_code_quality_findings(&raw_response)?;
+    let pull_request = github.get_pull_request(pr_number).await?;
+    let commit_id = pull_request.head.sha;
+
+    let mut posted = 0;
+    for finding in findings.into_iter().take(MAX_FINDINGS) {
+        if !is_valid_finding(&finding, &selected_files) {
+            println!(
+                "Skipping invalid model finding for {}:{} (must reference an added line)",
+                finding.path, finding.line
+            );
+            continue;
+        }
+
+        let body = format!(
+            "**Code quality - {}**\n\n{}",
+            finding.severity,
+            finding.body.trim()
+        );
+        let comment = github
+            .create_pull_request_review_comment(
+                pr_number,
+                &body,
+                &commit_id,
+                &finding.path,
+                finding.line,
+            )
+            .await?;
+        println!(
+            "Posted code-quality comment #{} on {}:{}",
+            comment.id, finding.path, finding.line
+        );
+        posted += 1;
+    }
+
+    println!("Code-quality agent posted {posted} inline comment(s)");
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct CodeQualityReply {
+    findings: Vec<CodeQualityFinding>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct CodeQualityFinding {
+    path: String,
+    line: u64,
+    severity: String,
+    body: String,
+}
+
+fn select_review_files(files: &[PullRequestFile]) -> Vec<PullRequestFile> {
+    let mut total_chars = 0;
+    files
+        .iter()
+        .filter(|file| is_reviewable_source_file(file))
+        .filter_map(|file| {
+            let patch = file.patch.as_ref()?;
+            if total_chars + patch.len() > MAX_REVIEW_PATCH_CHARS {
+                return None;
+            }
+            total_chars += patch.len();
+            Some(PullRequestFile {
+                filename: file.filename.clone(),
+                status: file.status.clone(),
+                patch: Some(patch.clone()),
+            })
+        })
+        .take(MAX_REVIEW_FILES)
+        .collect()
+}
+
+fn is_reviewable_source_file(file: &PullRequestFile) -> bool {
+    let name = file.filename.as_str();
+    let extension = name.rsplit('.').next().unwrap_or_default();
+    let supported = matches!(
+        extension,
+        "rs" | "py"
+            | "js"
+            | "jsx"
+            | "ts"
+            | "tsx"
+            | "go"
+            | "java"
+            | "kt"
+            | "kts"
+            | "rb"
+            | "php"
+            | "cs"
+            | "cpp"
+            | "cc"
+            | "c"
+            | "h"
+            | "hpp"
+            | "swift"
+            | "scala"
+            | "sh"
+            | "sql"
+            | "yaml"
+            | "yml"
+            | "toml"
+    );
+    supported
+        && file.status != "removed"
+        && !name.ends_with(".min.js")
+        && !name.contains("/generated/")
+        && !name.contains("/vendor/")
+        && !name.contains("/node_modules/")
+}
+
+fn build_code_quality_prompt(
+    repository: &str,
+    pr_number: u64,
+    files: &[PullRequestFile],
+) -> String {
+    let patches = files
+        .iter()
+        .filter_map(|file| {
+            file.patch
+                .as_ref()
+                .map(|patch| format!("### {}\n```diff\n{}\n```", file.filename, patch))
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    format!(
+        "You are the code-quality reviewer for pull request {repository}#{pr_number}.\n\
+Review only the supplied changes. Find concrete, high-confidence correctness, security, reliability, or maintainability problems that this PR introduces.\n\
+Do not comment on style, pre-existing issues, missing tests, or speculative concerns.\n\
+Every finding must target a line beginning with '+' in the diff (not the +++ file header).\n\
+Return only valid JSON in this exact shape:\n\
+{{\"findings\":[{{\"path\":\"src/example.rs\",\"line\":42,\"severity\":\"high|medium|low\",\"body\":\"Concise Markdown explanation, impact, and a specific fix.\"}}]}}\n\
+Return {{\"findings\":[]}} when there are no high-confidence findings.\n\
+Changed files:\n\n{patches}"
+    )
+}
+
+fn parse_code_quality_findings(raw: &str) -> Result<Vec<CodeQualityFinding>> {
+    let trimmed = raw.trim();
+    let candidate = trimmed
+        .strip_prefix("```json")
+        .and_then(|value| value.strip_suffix("```"))
+        .map(str::trim)
+        .unwrap_or(trimmed);
+    let reply: CodeQualityReply =
+        serde_json::from_str(candidate).context("code-quality agent returned invalid JSON")?;
+    Ok(reply.findings)
+}
+
+fn is_valid_finding(finding: &CodeQualityFinding, files: &[PullRequestFile]) -> bool {
+    if finding.body.trim().is_empty()
+        || !matches!(finding.severity.as_str(), "high" | "medium" | "low")
+    {
+        return false;
+    }
+    files
+        .iter()
+        .find(|file| file.filename == finding.path)
+        .and_then(|file| file.patch.as_deref())
+        .is_some_and(|patch| added_line_numbers(patch).contains(&finding.line))
+}
+
+fn added_line_numbers(patch: &str) -> Vec<u64> {
+    let mut line_number = 0_u64;
+    let mut added = Vec::new();
+    for line in patch.lines() {
+        if let Some(header) = line.strip_prefix("@@ ") {
+            if let Some(new_range) = header
+                .split_whitespace()
+                .nth(1)
+                .and_then(|value| value.strip_prefix('+'))
+            {
+                line_number = new_range
+                    .split(',')
+                    .next()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0);
+            }
+        } else if line.starts_with('\\') {
+            // "\ No newline at end of file" markers describe the previous
+            // line and do not correspond to a line in either file.
+        } else if line.starts_with('+') && !line.starts_with("+++") {
+            added.push(line_number);
+            line_number += 1;
+        } else if !line.starts_with('-') {
+            line_number += 1;
+        }
+    }
+    added
 }
 
 #[derive(Debug, Serialize)]
@@ -401,6 +609,66 @@ mod tests {
 
         assert_eq!(reply.comment, "I need more context.");
         assert_eq!(reply.reaction, "eyes");
+    }
+
+    #[test]
+    fn selects_only_source_files_within_the_prompt_budget() {
+        let files = vec![
+            PullRequestFile {
+                filename: "src/main.rs".to_owned(),
+                status: "modified".to_owned(),
+                patch: Some("@@ -1 +1 @@\n-old\n+new".to_owned()),
+            },
+            PullRequestFile {
+                filename: "Cargo.lock".to_owned(),
+                status: "modified".to_owned(),
+                patch: Some("@@ -1 +1 @@\n-old\n+new".to_owned()),
+            },
+        ];
+
+        let selected = select_review_files(&files);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].filename, "src/main.rs");
+    }
+
+    #[test]
+    fn validates_findings_against_added_diff_lines() {
+        let files = vec![PullRequestFile {
+            filename: "src/main.rs".to_owned(),
+            status: "modified".to_owned(),
+            patch: Some("@@ -10,2 +10,3 @@\n unchanged\n-old\n+new\n+another".to_owned()),
+        }];
+        let valid = CodeQualityFinding {
+            path: "src/main.rs".to_owned(),
+            line: 11,
+            severity: "high".to_owned(),
+            body: "This is a concrete problem.".to_owned(),
+        };
+        let invalid_line = CodeQualityFinding {
+            line: 10,
+            ..valid.clone()
+        };
+
+        assert!(is_valid_finding(&valid, &files));
+        assert!(!is_valid_finding(&invalid_line, &files));
+    }
+
+    #[test]
+    fn ignores_no_newline_at_end_of_file_markers_when_counting_added_lines() {
+        let patch = "@@ -1,2 +1,2 @@\n context\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file";
+
+        assert_eq!(added_line_numbers(patch), vec![2]);
+    }
+
+    #[test]
+    fn parses_code_quality_json() {
+        let findings = parse_code_quality_findings(
+            r#"{"findings":[{"path":"src/main.rs","line":12,"severity":"medium","body":"Avoid this."}]}"#,
+        )
+        .expect("findings");
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].line, 12);
     }
 
     fn tempfile_dir() -> PathBuf {

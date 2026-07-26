@@ -41,6 +41,44 @@ impl GitHubClient {
         self.get_json(&path, "list pull request comments").await
     }
 
+    /// List files changed by a pull request, including their unified diffs when GitHub provides them.
+    pub async fn list_pull_request_files(&self, pr_number: u64) -> Result<Vec<PullRequestFile>> {
+        let path = format!("pulls/{pr_number}/files?per_page=100");
+        self.get_json(&path, "list pull request files").await
+    }
+
+    /// Return the SHA at the head of a pull request, required for inline review comments.
+    pub async fn get_pull_request(&self, pr_number: u64) -> Result<PullRequest> {
+        let path = format!("pulls/{pr_number}");
+        self.get_json(&path, "get pull request").await
+    }
+
+    /// Add an inline comment to a changed line in a pull request.
+    pub async fn create_pull_request_review_comment(
+        &self,
+        pr_number: u64,
+        body: &str,
+        commit_id: &str,
+        path: &str,
+        line: u64,
+    ) -> Result<PullRequestReviewComment> {
+        let endpoint = format!("pulls/{pr_number}/comments");
+        let response = self
+            .request(Method::POST, &endpoint)
+            .json(&CreateReviewCommentRequest {
+                body,
+                commit_id,
+                path,
+                line,
+                side: "RIGHT",
+            })
+            .send()
+            .await
+            .context("failed to create inline pull request review comment")?;
+
+        parse_json_response(response, "create inline pull request review comment").await
+    }
+
     /// Create a regular timeline comment on a pull request.
     pub async fn create_issue_comment(&self, pr_number: u64, body: &str) -> Result<IssueComment> {
         let path = format!("issues/{pr_number}/comments");
@@ -105,6 +143,28 @@ pub struct IssueComment {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct PullRequestFile {
+    pub filename: String,
+    pub status: String,
+    pub patch: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PullRequestReviewComment {
+    pub id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PullRequest {
+    pub head: PullRequestHead,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PullRequestHead {
+    pub sha: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct GitHubUser {
     pub login: String,
     #[serde(rename = "type")]
@@ -119,6 +179,15 @@ struct CreateCommentRequest<'a> {
 #[derive(Debug, Serialize)]
 struct CreateReactionRequest<'a> {
     content: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateReviewCommentRequest<'a> {
+    body: &'a str,
+    commit_id: &'a str,
+    path: &'a str,
+    line: u64,
+    side: &'static str,
 }
 
 async fn parse_json_response<T: DeserializeOwned>(
