@@ -20,8 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Run PRBot
-        # Replace with your published repo and version tag after the first release.
-        uses: your-github-user/prbot@v0.1.0
+        uses: jaibhasin/PRBot@v0.1.1
         with:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           # Optional. If omitted, the job's GITHUB_TOKEN is used.
