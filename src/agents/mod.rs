@@ -2,8 +2,8 @@ mod prompts;
 
 use crate::config::ReviewConfig;
 use crate::llm::LlmClient;
-use crate::repository::{render_repo_map, tool_definitions, RepositoryTools};
-use crate::types::{CandidateFinding, Priority, ReviewManifest};
+use crate::repository::{execute_bounded, render_repo_map, tool_definitions, RepositoryTools};
+use crate::types::{CandidateFinding, Priority, ReviewBundle, ReviewManifest, RiskLevel};
 use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt};
 use serde::Deserialize;
@@ -23,15 +23,24 @@ pub async fn review_manifest(
     let repo_map = Arc::new(render_repo_map(manifest));
     let files = Arc::new(manifest.files.clone());
     let config = Arc::new(config.clone());
-    let results = stream::iter(manifest.bundles.clone())
-        .map(|bundle| {
+    let tasks = manifest
+        .bundles
+        .iter()
+        .flat_map(|bundle| {
+            review_roles(bundle)
+                .into_iter()
+                .map(|role| (bundle.clone(), role))
+        })
+        .collect::<Vec<_>>();
+    let results = stream::iter(tasks)
+        .map(|(bundle, role)| {
             let client = client.clone();
             let tools = Arc::clone(&tools);
             let repo_map = Arc::clone(&repo_map);
             let files = Arc::clone(&files);
             let config = Arc::clone(&config);
             async move {
-                let prompt = prompts::bundle_prompt(&bundle, &files, &repo_map, &config);
+                let prompt = prompts::bundle_prompt(&bundle, role, &files, &repo_map, &config);
                 let system = prompts::reviewer_system();
                 let tool_runner = Arc::clone(&tools);
                 let response = client
@@ -43,11 +52,14 @@ pub async fn review_manifest(
                         12,
                         move |name, arguments| {
                             let tools = Arc::clone(&tool_runner);
-                            async move { tools.execute(&name, &arguments) }
+                            async move { execute_bounded(tools, name, arguments).await }
                         },
                     )
                     .await;
-                (bundle.id, response.and_then(|raw| parse_findings(&raw)))
+                (
+                    format!("{}:{role}", bundle.id),
+                    response.and_then(|raw| parse_findings(&raw)),
+                )
             }
         })
         .buffer_unordered(config.max_concurrency)
@@ -90,6 +102,16 @@ pub async fn review_manifest(
     }
 }
 
+fn review_roles(bundle: &ReviewBundle) -> Vec<&'static str> {
+    let mut roles = vec!["correctness and reliability"];
+    match bundle.risk {
+        RiskLevel::Critical => roles.push("security and authorization boundaries"),
+        RiskLevel::High => roles.push("concurrency, state transitions, and compatibility"),
+        RiskLevel::Low | RiskLevel::Medium => {}
+    }
+    roles
+}
+
 async fn run_cross_bundle_audit(
     client: &LlmClient,
     tools: Arc<RepositoryTools>,
@@ -107,7 +129,7 @@ async fn run_cross_bundle_audit(
             10,
             move |name, arguments| {
                 let tools = Arc::clone(&tool_runner);
-                async move { tools.execute(&name, &arguments) }
+                async move { execute_bounded(tools, name, arguments).await }
             },
         )
         .await?;
@@ -135,7 +157,7 @@ async fn verify_findings(
             8,
             move |name, arguments| {
                 let tools = Arc::clone(&tool_runner);
-                async move { tools.execute(&name, &arguments) }
+                async move { execute_bounded(tools, name, arguments).await }
             },
         )
         .await?;

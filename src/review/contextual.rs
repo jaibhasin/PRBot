@@ -7,11 +7,16 @@ use crate::reporting::{
     deduplicate, finding_body, parse_summary_state, render_summary, resolve_findings,
     SUMMARY_MARKER,
 };
-use crate::repository::{GitRepository, RepositoryTools};
+use crate::repository::{execute_bounded, GitRepository, RepositoryTools};
 use crate::types::{DiffSide, RunOutcome, RunStatus};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use std::env;
 use std::sync::Arc;
+
+pub enum ReviewResult {
+    Complete,
+    Stale(PullRequest),
+}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run_review(
@@ -21,12 +26,13 @@ pub async fn run_review(
     pr_number: u64,
     pull_request: &PullRequest,
     repository: Arc<GitRepository>,
-    manifest: crate::types::ReviewManifest,
-    pr_context: String,
+    manifest: &crate::types::ReviewManifest,
+    pr_context: &str,
     comments: &[IssueComment],
     command_id: Option<u64>,
     config: &ReviewConfig,
-) -> Result<()> {
+    budget: Arc<Budget>,
+) -> Result<ReviewResult> {
     let previous_comment = comments
         .iter()
         .rev()
@@ -53,43 +59,40 @@ pub async fn run_review(
         } else {
             println!("PRBot already reviewed head {}", pull_request.head.sha);
         }
-        return Ok(());
+        return Ok(ReviewResult::Complete);
     }
 
-    let budget = Arc::new(Budget::new(
-        config.max_review_minutes,
-        config.max_input_tokens,
-        config.max_cost_usd,
-    ));
     let client = LlmClient::new(
         api_key,
         env::var("OPENROUTER_URL").ok(),
         Arc::clone(&budget),
         config.max_concurrency,
     )?;
-    let tools = Arc::new(RepositoryTools::new(Arc::clone(&repository), pr_context));
+    let tools = Arc::new(RepositoryTools::new(
+        Arc::clone(&repository),
+        pr_context.to_owned(),
+    ));
     let result = match config.engine {
         ReviewEngine::Contextual => {
-            agents::review_manifest(&client, Arc::clone(&tools), &manifest, config).await
+            agents::review_manifest(&client, Arc::clone(&tools), manifest, config).await
         }
-        ReviewEngine::Legacy => legacy::review(&client, &manifest, config).await,
+        ReviewEngine::Legacy => legacy::review(&client, manifest, config).await,
     };
 
     let (resolved, unanchored) = resolve_findings(result.findings, &manifest.files);
     let resolved_count = resolved.len();
     let new_findings = deduplicate(resolved, &state.fingerprints);
     let duplicate_count = resolved_count.saturating_sub(new_findings.len());
+    for finding in &new_findings {
+        state.fingerprints.insert(finding.fingerprint.clone());
+    }
     let mut publish = new_findings;
     let overflow = publish.len().saturating_sub(config.max_comments);
     publish.truncate(config.max_comments);
 
     let current = github.get_pull_request(pr_number).await?;
     if current.head.sha != pull_request.head.sha {
-        bail!(
-            "pull request head changed during review from {} to {}; discarded stale result",
-            pull_request.head.sha,
-            current.head.sha
-        );
+        return Ok(ReviewResult::Stale(current));
     }
 
     if !publish.is_empty() {
@@ -105,9 +108,6 @@ pub async fn run_review(
         println!("PRBot created formal review #{id}");
     }
 
-    for finding in &publish {
-        state.fingerprints.insert(finding.fingerprint.clone());
-    }
     if let Some(command_id) = command_id {
         state.handled_comment_ids.insert(command_id);
     }
@@ -153,7 +153,7 @@ pub async fn run_review(
         outcome.assigned_hunks,
         outcome.eligible_hunks
     );
-    Ok(())
+    Ok(ReviewResult::Complete)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -194,8 +194,18 @@ pub async fn answer_command(
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let inline_comments = github
+        .list_review_comments(pr_number)
+        .await?
+        .into_iter()
+        .rev()
+        .take(20)
+        .rev()
+        .map(|comment| truncate(&comment.body, 2_000))
+        .collect::<Vec<_>>()
+        .join("\n");
     let prompt = format!(
-        "Owner command:\n{question}\n\nRecent PR discussion:\n{recent}\n\
+        "Owner command:\n{question}\n\nRecent PR discussion:\n{recent}\n\nRecent inline review comments:\n{inline_comments}\n\
 Use repository tools when the answer depends on code. Reply with concise GitHub Markdown only."
     );
     let tool_runner = Arc::clone(&tools);
@@ -208,7 +218,7 @@ Use repository tools when the answer depends on code. Reply with concise GitHub 
             12,
             move |name, arguments| {
                 let tools = Arc::clone(&tool_runner);
-                async move { tools.execute(&name, &arguments) }
+                async move { execute_bounded(tools, name, arguments).await }
             },
         )
         .await

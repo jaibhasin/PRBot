@@ -258,6 +258,9 @@ fn validate_ref(value: &str) -> Result<()> {
         || value.starts_with('-')
         || value.contains("..")
         || value.contains(char::is_whitespace)
+        || value
+            .chars()
+            .any(|character| !character.is_ascii_alphanumeric() && !"/._-".contains(character))
     {
         bail!("unsafe Git ref '{value}'");
     }
@@ -282,64 +285,4 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
         result.push_str("\n...[truncated]");
     }
     result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn reads_exact_revisions_without_a_checkout() {
-        let temp = tempfile::tempdir().expect("temp");
-        run_plain(
-            Command::new("git").args(["init"]).arg(temp.path()),
-            "initialize test repository",
-        )
-        .expect("init");
-        git(temp.path(), &["config", "user.email", "prbot@example.com"]);
-        git(temp.path(), &["config", "user.name", "PRBot"]);
-        fs::write(temp.path().join("file.rs"), "base\n").expect("write base");
-        git(temp.path(), &["add", "file.rs"]);
-        git(temp.path(), &["commit", "-m", "base"]);
-        let base = worktree_output(temp.path(), &["rev-parse", "HEAD"]);
-        fs::write(temp.path().join("file.rs"), "head\n").expect("write head");
-        git(temp.path(), &["commit", "-am", "head"]);
-        let head = worktree_output(temp.path(), &["rev-parse", "HEAD"]);
-        let repository =
-            GitRepository::from_worktree(temp.path(), base.trim(), head.trim()).expect("repo");
-        assert_eq!(
-            repository.read_file("base", "file.rs", 100).expect("base"),
-            "base\n"
-        );
-        assert_eq!(
-            repository.read_file("head", "file.rs", 100).expect("head"),
-            "head\n"
-        );
-    }
-
-    fn git(path: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(args)
-            .output()
-            .expect("git");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    fn worktree_output(path: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(args)
-            .output()
-            .expect("git");
-        assert!(output.status.success());
-        String::from_utf8(output.stdout).expect("utf8")
-    }
 }

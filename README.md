@@ -99,11 +99,13 @@ Action inputs are hard ceilings:
 | `max_cost_usd` | `3.00` | Estimated model-cost ceiling |
 | `max_concurrency` | `8` | Concurrent semantic bundles |
 | `max_comments` | `12` | Maximum published inline findings |
-| `engine` | `contextual` | `contextual` or temporary `legacy` rollback |
+| `engine` | `legacy` | `contextual` dogfood engine or legacy fallback |
 | `dry_run` | `false` | Build and print the manifest without LLM or GitHub writes |
 
 The review and verification model IDs must be different.
 The release defaults should be updated only after the model pair passes the repository evaluation suite.
+Set `engine: contextual` explicitly while dogfooding the new engine.
+The default remains `legacy` until at least 50 held-out, human-adjudicated cases pass the quality gate described in [`evals/README.md`](evals/README.md).
 
 Repositories can add a trusted `.prbot.toml` file:
 

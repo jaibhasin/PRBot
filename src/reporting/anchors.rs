@@ -151,6 +151,74 @@ mod tests {
         assert_eq!(resolved[0].line, Some(1));
     }
 
+    #[test]
+    fn resolves_multiline_anchor_range() {
+        let file = ChangedFile {
+            path: "src/main.rs".to_owned(),
+            old_path: None,
+            status: FileStatus::Modified,
+            patch: String::new(),
+            hunks: vec![DiffHunk {
+                header: "@@ -1 +1,2 @@".to_owned(),
+                old_start: 1,
+                new_start: 1,
+                lines: vec![
+                    DiffLine {
+                        side: DiffSide::Right,
+                        old_line: None,
+                        new_line: Some(1),
+                        content: "first".to_owned(),
+                    },
+                    DiffLine {
+                        side: DiffSide::Right,
+                        old_line: None,
+                        new_line: Some(2),
+                        content: "second".to_owned(),
+                    },
+                ],
+            }],
+        };
+        let finding = candidate(DiffSide::Right, "first\nsecond");
+        let (resolved, skipped) = resolve_findings(vec![finding], &[file]);
+        assert_eq!(skipped, 0);
+        assert_eq!(resolved[0].start_line, Some(1));
+        assert_eq!(resolved[0].line, Some(2));
+    }
+
+    #[test]
+    fn rejects_ambiguous_anchor() {
+        let repeated = DiffLine {
+            side: DiffSide::Right,
+            old_line: None,
+            new_line: Some(1),
+            content: "same".to_owned(),
+        };
+        let file = ChangedFile {
+            path: "src/main.rs".to_owned(),
+            old_path: None,
+            status: FileStatus::Modified,
+            patch: String::new(),
+            hunks: vec![DiffHunk {
+                header: "@@ -1 +1,2 @@".to_owned(),
+                old_start: 1,
+                new_start: 1,
+                lines: vec![
+                    repeated,
+                    DiffLine {
+                        side: DiffSide::Right,
+                        old_line: None,
+                        new_line: Some(2),
+                        content: "same".to_owned(),
+                    },
+                ],
+            }],
+        };
+        let (resolved, skipped) =
+            resolve_findings(vec![candidate(DiffSide::Right, "same")], &[file]);
+        assert!(resolved.is_empty());
+        assert_eq!(skipped, 1);
+    }
+
     fn candidate(side: DiffSide, anchor: &str) -> CandidateFinding {
         CandidateFinding {
             path: "src/main.rs".to_owned(),

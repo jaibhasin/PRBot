@@ -86,13 +86,21 @@ impl GitHubClient {
     }
 
     pub async fn list_check_runs(&self, sha: &str) -> Result<Vec<CheckRun>> {
-        let response: CheckRunsResponse = self
-            .get_json(
-                &format!("commits/{sha}/check-runs?per_page=100"),
-                "list check runs",
-            )
-            .await?;
-        Ok(response.check_runs)
+        let mut all = Vec::new();
+        for page in 1..=30 {
+            let response: CheckRunsResponse = self
+                .get_json(
+                    &format!("commits/{sha}/check-runs?per_page=100&page={page}"),
+                    "list check runs",
+                )
+                .await?;
+            let count = response.check_runs.len();
+            all.extend(response.check_runs);
+            if count < 100 {
+                break;
+            }
+        }
+        Ok(all)
     }
 
     pub async fn get_issue(&self, number: u64) -> Result<Issue> {
@@ -229,14 +237,22 @@ impl GitHubClient {
             {
                 return Ok(response);
             }
-            tokio::time::sleep(delay).await;
+            let wait = response
+                .headers()
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(Duration::from_secs)
+                .unwrap_or(delay)
+                .min(Duration::from_secs(10));
+            tokio::time::sleep(wait).await;
             delay *= 2;
         }
         unreachable!("retry loop always returns on final attempt")
     }
 }
 
-fn next_link(header: &str) -> Option<String> {
+pub(super) fn next_link(header: &str) -> Option<String> {
     header.split(',').find_map(|part| {
         let mut sections = part.trim().split(';');
         let url = sections
@@ -269,22 +285,4 @@ async fn parse_empty(response: Response, operation: &str) -> Result<()> {
         bail!("GitHub failed to {operation} ({status}): {body}");
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn accepts_only_owner_and_repository_shape() {
-        assert!(GitHubClient::new("token", "octocat/hello").is_ok());
-        assert!(GitHubClient::new("token", "octocat").is_err());
-        assert!(GitHubClient::new("token", "a/b/c").is_err());
-    }
-
-    #[test]
-    fn parses_next_pagination_link() {
-        let link = r#"<https://api.github.com/repos/a/b/issues/1/comments?page=2>; rel="next", <https://api.github.com/repos/a/b/issues/1/comments?page=3>; rel="last""#;
-        assert!(next_link(link).expect("next").ends_with("page=2"));
-    }
 }

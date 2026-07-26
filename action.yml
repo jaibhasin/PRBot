@@ -54,7 +54,7 @@ inputs:
   engine:
     description: "Review engine: contextual or legacy."
     required: false
-    default: "contextual"
+    default: "legacy"
 
 runs:
   using: "docker"

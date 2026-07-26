@@ -114,4 +114,30 @@ mod tests {
         assert_eq!(parsed.reviewed_sha, "abc");
         assert!(parsed.fingerprints.contains("one"));
     }
+
+    #[test]
+    fn partial_run_never_claims_no_verified_findings() {
+        let outcome = RunOutcome {
+            status: RunStatus::Partial,
+            reviewed_sha: "abc".to_owned(),
+            coverage_complete: false,
+            eligible_hunks: 2,
+            assigned_hunks: 1,
+            findings: 0,
+            skipped_findings: 0,
+            failed_bundles: vec!["bundle-2".to_owned()],
+            budget: crate::types::BudgetSnapshot::default(),
+        };
+        let summary = render_summary(
+            "octocat/hello",
+            1,
+            &outcome,
+            &[],
+            &SummaryState::default(),
+            "provider/reviewer",
+            "other/verifier",
+        );
+        assert!(summary.contains("Partial review"));
+        assert!(!summary.contains("No verified findings"));
+    }
 }

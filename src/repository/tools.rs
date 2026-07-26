@@ -3,6 +3,21 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use std::time::Duration;
+
+pub async fn execute_bounded(
+    tools: Arc<RepositoryTools>,
+    name: String,
+    arguments: String,
+) -> Result<String> {
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || tools.execute(&name, &arguments)),
+    )
+    .await
+    .context("repository tool exceeded 10-second limit")?
+    .context("repository tool task failed")?
+}
 
 pub struct RepositoryTools {
     repository: Arc<GitRepository>,
@@ -44,7 +59,8 @@ impl RepositoryTools {
             .filter(|path| path.starts_with(&args.prefix))
             .take(500)
             .collect::<Vec<_>>();
-        serde_json::to_string(&paths).context("failed to serialize tree result")
+        let output = serde_json::to_string(&paths).context("failed to serialize tree result")?;
+        Ok(truncate(&output, 10_000))
     }
 
     fn read_file(&self, arguments: &str) -> Result<String> {
@@ -55,14 +71,17 @@ impl RepositoryTools {
             revision: String,
             #[serde(default = "one")]
             start_line: usize,
-            #[serde(default = "four_hundred")]
-            end_line: usize,
+            #[serde(default)]
+            end_line: Option<usize>,
         }
         let args: Args = parse(arguments)?;
-        if args.end_line < args.start_line {
+        let requested_end = args
+            .end_line
+            .unwrap_or_else(|| args.start_line.saturating_add(399));
+        if requested_end < args.start_line {
             bail!("end_line must be greater than or equal to start_line");
         }
-        let end = args.end_line.min(args.start_line.saturating_add(399));
+        let end = requested_end.min(args.start_line.saturating_add(399));
         let content = self
             .repository
             .read_file(&args.revision, &args.path, 250_000)?;
@@ -180,10 +199,6 @@ fn head() -> String {
 
 fn one() -> usize {
     1
-}
-
-fn four_hundred() -> usize {
-    400
 }
 
 fn one_hundred() -> usize {

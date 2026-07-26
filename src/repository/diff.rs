@@ -10,6 +10,7 @@ pub fn build_manifest(repository: &GitRepository, filter: &PathFilter) -> Result
         &[
             "diff".to_owned(),
             "--name-status".to_owned(),
+            "-z".to_owned(),
             "-M".to_owned(),
             repository.base_sha().to_owned(),
             repository.head_sha().to_owned(),
@@ -17,8 +18,7 @@ pub fn build_manifest(repository: &GitRepository, filter: &PathFilter) -> Result
         "list changed files",
     )?;
     let mut manifest = ReviewManifest::default();
-    for line in names.lines().filter(|line| !line.trim().is_empty()) {
-        let (status, old_path, path) = parse_name_status(line)?;
+    for (status, old_path, path) in parse_name_status_output(&names)? {
         if !filter.is_reviewable(&path) {
             manifest.ignored.push(IgnoredFile {
                 path,
@@ -46,25 +46,31 @@ pub fn build_manifest(repository: &GitRepository, filter: &PathFilter) -> Result
     Ok(manifest)
 }
 
-fn parse_name_status(line: &str) -> Result<(FileStatus, Option<String>, String)> {
-    let fields = line.split('\t').collect::<Vec<_>>();
-    let raw_status = fields.first().copied().unwrap_or_default();
-    let code = raw_status.chars().next().unwrap_or('?');
-    let status = match code {
+fn parse_name_status_output(output: &str) -> Result<Vec<(FileStatus, Option<String>, String)>> {
+    let mut fields = output.split('\0').filter(|field| !field.is_empty());
+    let mut result = Vec::new();
+    while let Some(raw_status) = fields.next() {
+        let status = status_from_code(raw_status);
+        if matches!(status, FileStatus::Renamed | FileStatus::Copied) {
+            let old = fields.next().context("rename missing old path")?;
+            let new = fields.next().context("rename missing new path")?;
+            result.push((status, Some(old.to_owned()), new.to_owned()));
+        } else {
+            let path = fields.next().context("changed file missing path")?;
+            result.push((status, None, path.to_owned()));
+        }
+    }
+    Ok(result)
+}
+
+fn status_from_code(raw_status: &str) -> FileStatus {
+    match raw_status.chars().next().unwrap_or('?') {
         'A' => FileStatus::Added,
         'M' => FileStatus::Modified,
         'D' => FileStatus::Deleted,
         'R' => FileStatus::Renamed,
         'C' => FileStatus::Copied,
         _ => FileStatus::Unknown,
-    };
-    if matches!(status, FileStatus::Renamed | FileStatus::Copied) {
-        let old = fields.get(1).context("rename missing old path")?;
-        let new = fields.get(2).context("rename missing new path")?;
-        Ok((status, Some((*old).to_owned()), (*new).to_owned()))
-    } else {
-        let path = fields.get(1).context("changed file missing path")?;
-        Ok((status, None, (*path).to_owned()))
     }
 }
 
@@ -149,5 +155,30 @@ mod tests {
         assert_eq!(hunks[0].lines[1].old_line, Some(11));
         assert_eq!(hunks[0].lines[2].new_line, Some(11));
         assert_eq!(hunks[0].lines[3].new_line, Some(12));
+    }
+
+    #[test]
+    fn parses_rename_name_status() {
+        let mut entries =
+            parse_name_status_output("R100\0src/old.rs\0src/new.rs\0").expect("rename");
+        let (status, old, new) = entries.remove(0);
+        assert!(matches!(status, FileStatus::Renamed));
+        assert_eq!(old.as_deref(), Some("src/old.rs"));
+        assert_eq!(new, "src/new.rs");
+    }
+
+    #[test]
+    fn parses_nul_delimited_path_with_tabs() {
+        let entries = parse_name_status_output("M\0src/a\tb.rs\0").expect("NUL name status");
+        assert_eq!(entries[0].2, "src/a\tb.rs");
+    }
+
+    #[test]
+    fn ignores_no_newline_marker() {
+        let patch =
+            "@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file";
+        let hunks = parse_patch(patch);
+        assert_eq!(hunks[0].lines.len(), 2);
+        assert_eq!(hunks[0].lines[1].new_line, Some(1));
     }
 }

@@ -16,6 +16,7 @@ pub fn verifier_system() -> &'static str {
 
 pub fn bundle_prompt(
     bundle: &ReviewBundle,
+    role: &str,
     files: &[ChangedFile],
     repo_map: &str,
     config: &ReviewConfig,
@@ -33,7 +34,7 @@ pub fn bundle_prompt(
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Review bundle `{}` with risk {:?}.\n\
+        "Review bundle `{}` with risk {:?} as the `{role}` specialist.\n\
 Every finding must use an exact contiguous line from this diff as `anchor` and choose LEFT for deleted lines or RIGHT for added/context lines.\n\
 Use related-file tools before asserting cross-file behavior.\n\
 Return exactly:\n{}\n\

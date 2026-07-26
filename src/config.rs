@@ -15,6 +15,7 @@ pub struct ReviewConfig {
     pub max_concurrency: usize,
     pub max_comments: usize,
     pub engine: ReviewEngine,
+    pub auto_review_owner_authored: bool,
     pub include: Vec<String>,
     pub exclude: Vec<String>,
     pub instructions: Vec<String>,
@@ -31,7 +32,8 @@ impl Default for ReviewConfig {
             max_cost_usd: 3.0,
             max_concurrency: 8,
             max_comments: 12,
-            engine: ReviewEngine::Contextual,
+            engine: ReviewEngine::Legacy,
+            auto_review_owner_authored: true,
             include: vec!["**/*".to_owned()],
             exclude: default_excludes(),
             instructions: Vec::new(),
@@ -88,6 +90,7 @@ impl ReviewConfig {
             if policy != "owner-authored" && policy != "off" {
                 bail!("invalid auto_review policy '{policy}', expected owner-authored or off");
             }
+            self.auto_review_owner_authored = policy == "owner-authored";
         }
         if let Some(include) = parsed.review.include {
             validate_globs(&include)?;
@@ -228,5 +231,25 @@ mod tests {
         assert!(filter.is_reviewable("src/main.rs"));
         assert!(!filter.is_reviewable("vendor/main.rs"));
         assert!(!filter.is_reviewable("assets/logo.png"));
+    }
+
+    #[test]
+    fn trusted_config_can_disable_automatic_reviews() {
+        let mut config = ReviewConfig::default();
+        config
+            .apply_repository_toml("[review]\nauto_review = \"off\"\n")
+            .expect("config");
+        assert!(!config.auto_review_owner_authored);
+    }
+
+    #[test]
+    fn rejects_invalid_policy_and_glob() {
+        let mut config = ReviewConfig::default();
+        assert!(config
+            .apply_repository_toml("[review]\nauto_review = \"everyone\"\n")
+            .is_err());
+        assert!(config
+            .apply_repository_toml("[review]\ninclude = [\"[\"]\n")
+            .is_err());
     }
 }

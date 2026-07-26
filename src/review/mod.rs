@@ -1,10 +1,13 @@
 mod contextual;
 mod event;
 mod legacy;
+mod review_context;
+#[cfg(test)]
+mod tests;
 
-use crate::config::{PathRule, ReviewConfig, ReviewEngine};
-use crate::github::{CheckRun, GitHubClient, Issue, PullRequest};
-use crate::repository::{build_context, build_manifest, GitRepository};
+use crate::config::{ReviewConfig, ReviewEngine};
+use crate::github::GitHubClient;
+use crate::llm::Budget;
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use event::Command;
@@ -22,6 +25,8 @@ pub struct ReviewArgs {
     pub openrouter_api_key: Option<String>,
     #[arg(long, env = "GITHUB_TOKEN", hide_env_values = true)]
     pub github_token: Option<String>,
+    #[arg(long, env = "GITHUB_API_URL", hide = true)]
+    pub github_api_url: Option<String>,
     #[arg(long, env = "PRBOT_REVIEW_MODEL")]
     pub review_model: Option<String>,
     #[arg(long, env = "PRBOT_VERIFICATION_MODEL")]
@@ -36,7 +41,7 @@ pub struct ReviewArgs {
     pub max_concurrency: usize,
     #[arg(long, env = "PRBOT_MAX_COMMENTS", default_value_t = 12)]
     pub max_comments: usize,
-    #[arg(long, env = "PRBOT_ENGINE", default_value = "contextual")]
+    #[arg(long, env = "PRBOT_ENGINE", default_value = "legacy")]
     pub engine: String,
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
@@ -47,9 +52,14 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
     let token = required(args.github_token.as_deref(), "GITHUB_TOKEN")?.to_owned();
     let event = event::read_event_payload()?;
     let pr_number = event::resolve_pr_number(args.pr_number.as_deref(), event.as_ref())?;
-    let github = GitHubClient::new(&token, &repository)?;
+    let github = if let Some(base_url) = &args.github_api_url {
+        GitHubClient::with_base_url(&token, &repository, base_url)?
+    } else {
+        GitHubClient::new(&token, &repository)?
+    };
     let pull_request = github.get_pull_request(pr_number).await?;
     let invocation = event::resolve_invocation(event.as_ref());
+    let automatic = matches!(&invocation, event::Invocation::Automatic);
 
     let (actor, command, comment_id) = match invocation {
         event::Invocation::Ignored(reason) => {
@@ -78,6 +88,12 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
         return Ok(());
     }
 
+    let mut config = config_from_args(&args)?;
+    let dry_run = args.dry_run || env_flag("PRBOT_DRY_RUN");
+    if !dry_run && args.openrouter_api_key.as_deref().unwrap_or("").is_empty() {
+        bail!("missing --openrouter-api-key or OPENROUTER_API_KEY");
+    }
+
     let comments = github.list_issue_comments(pr_number).await?;
     if let Some(comment_id) = comment_id {
         if comments.iter().any(|item| {
@@ -89,47 +105,29 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
         }
     }
 
-    let mut config = config_from_args(&args)?;
-    let dry_run = args.dry_run || env_flag("PRBOT_DRY_RUN");
-    if !dry_run && args.openrouter_api_key.as_deref().unwrap_or("").is_empty() {
-        bail!("missing --openrouter-api-key or OPENROUTER_API_KEY");
+    let mut snapshot = review_context::prepare_snapshot(
+        &github,
+        &repository,
+        &token,
+        pr_number,
+        &pull_request,
+        &mut config,
+        true,
+    )
+    .await?;
+    if automatic && !config.auto_review_owner_authored {
+        println!("PRBot automatic review is disabled by trusted .prbot.toml");
+        return Ok(());
     }
-
-    let repo_for_fetch = repository.clone();
-    let base_ref = pull_request.base.ref_name.clone();
-    let expected_head = pull_request.head.sha.clone();
-    let fetch_token = token.clone();
-    let git = tokio::task::spawn_blocking(move || {
-        GitRepository::fetch_pull_request(
-            &repo_for_fetch,
-            pr_number,
-            &base_ref,
-            &expected_head,
-            &fetch_token,
-        )
-    })
-    .await
-    .context("repository fetch task failed")??;
-    apply_trusted_repository_config(&git, &mut config)?;
-    let filter = config.path_filter()?;
-    let mut manifest = build_manifest(&git, &filter)?;
-    build_context(&git, &mut manifest)?;
-    let checks = github
-        .list_check_runs(&pull_request.head.sha)
-        .await
-        .unwrap_or_default();
-    let linked_issue = fetch_linked_issue(&github, &pull_request).await;
-    let pr_context = render_pr_context(&pull_request, &checks, linked_issue.as_ref(), &config);
-
     if dry_run {
         let output = DryRunOutput {
             repository: &repository,
             pr_number,
             actor: &actor,
             command: command.name(),
-            base_sha: git.base_sha(),
-            head_sha: git.head_sha(),
-            manifest: &manifest,
+            base_sha: snapshot.repository.base_sha(),
+            head_sha: snapshot.repository.head_sha(),
+            manifest: &snapshot.manifest,
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
@@ -139,34 +137,83 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
         .openrouter_api_key
         .as_deref()
         .context("OpenRouter API key disappeared after validation")?;
-    let git = Arc::new(git);
     match command {
         Command::Review => {
-            contextual::run_review(
-                &github,
-                api_key,
-                &repository,
-                pr_number,
-                &pull_request,
-                git,
-                manifest,
-                pr_context,
-                &comments,
-                comment_id,
-                &config,
-            )
-            .await
+            let budget = Arc::new(Budget::new(
+                config.max_review_minutes,
+                config.max_input_tokens,
+                config.max_cost_usd,
+            ));
+            let mut reviewed_pull_request = pull_request;
+            for attempt in 0..=1 {
+                match contextual::run_review(
+                    &github,
+                    api_key,
+                    &repository,
+                    pr_number,
+                    &reviewed_pull_request,
+                    Arc::clone(&snapshot.repository),
+                    &snapshot.manifest,
+                    &snapshot.pr_context,
+                    &comments,
+                    comment_id,
+                    &config,
+                    Arc::clone(&budget),
+                )
+                .await?
+                {
+                    contextual::ReviewResult::Complete => return Ok(()),
+                    contextual::ReviewResult::Stale(updated) if attempt == 0 => {
+                        println!(
+                            "PR head changed during review; retrying once at {}",
+                            updated.head.sha
+                        );
+                        reviewed_pull_request = updated;
+                        snapshot = review_context::prepare_snapshot(
+                            &github,
+                            &repository,
+                            &token,
+                            pr_number,
+                            &reviewed_pull_request,
+                            &mut config,
+                            false,
+                        )
+                        .await?;
+                    }
+                    contextual::ReviewResult::Stale(updated) => {
+                        bail!(
+                            "PR head changed again during retry to {}; no stale findings were published",
+                            updated.head.sha
+                        );
+                    }
+                }
+            }
+            unreachable!("review retry loop always returns")
         }
-        Command::Ask(question) | Command::Explain(question) => {
+        Command::Ask(question) => {
             contextual::answer_command(
                 &github,
                 api_key,
                 pr_number,
-                git,
-                pr_context,
+                snapshot.repository,
+                snapshot.pr_context,
                 &comments,
                 comment_id.context("interactive command missing comment id")?,
                 &question,
+                &config,
+            )
+            .await
+        }
+        Command::Explain(target) => {
+            contextual::answer_command(
+                &github,
+                api_key,
+                pr_number,
+                snapshot.repository,
+                snapshot.pr_context,
+                &comments,
+                comment_id.context("interactive command missing comment id")?,
+                &format!("Explain this PRBot finding in detail: {target}"),
                 &config,
             )
             .await
@@ -197,98 +244,16 @@ fn config_from_args(args: &ReviewArgs) -> Result<ReviewConfig> {
     if config.review_model == config.verification_model {
         bail!("review_model and verification_model must use different model IDs");
     }
+    let review_provider = config.review_model.split('/').next().unwrap_or_default();
+    let verifier_provider = config
+        .verification_model
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    if review_provider == verifier_provider {
+        bail!("review_model and verification_model must use different provider families");
+    }
     Ok(config)
-}
-
-fn apply_trusted_repository_config(
-    repository: &GitRepository,
-    config: &mut ReviewConfig,
-) -> Result<()> {
-    if let Ok(source) = repository.read_file("base", ".prbot.toml", 100_000) {
-        config.apply_repository_toml(&source)?;
-    }
-    for path in repository
-        .list_tree("base")?
-        .into_iter()
-        .filter(|path| path == "AGENTS.md" || path.ends_with("/AGENTS.md"))
-        .take(50)
-    {
-        let source = repository.read_file("base", &path, 20_000)?;
-        if path == "AGENTS.md" {
-            config.instructions.push(source);
-        } else if let Some(directory) = path.strip_suffix("/AGENTS.md") {
-            config.path_rules.push(PathRule {
-                glob: format!("{directory}/**"),
-                instructions: vec![source],
-            });
-        }
-    }
-    Ok(())
-}
-
-async fn fetch_linked_issue(github: &GitHubClient, pull_request: &PullRequest) -> Option<Issue> {
-    let body = pull_request.body.as_deref()?;
-    let number = body
-        .split_whitespace()
-        .filter_map(|word| {
-            word.trim_matches(|c: char| !c.is_ascii_digit() && c != '#')
-                .strip_prefix('#')
-        })
-        .filter_map(|value| value.parse::<u64>().ok())
-        .find(|number| *number != pull_request.number)?;
-    github.get_issue(number).await.ok()
-}
-
-fn render_pr_context(
-    pull_request: &PullRequest,
-    checks: &[CheckRun],
-    linked_issue: Option<&Issue>,
-    config: &ReviewConfig,
-) -> String {
-    let checks = checks
-        .iter()
-        .take(50)
-        .map(|check| {
-            let details = check
-                .output
-                .as_ref()
-                .map(|output| {
-                    format!(
-                        " - {} {}",
-                        output.title.as_deref().unwrap_or_default(),
-                        output.summary.as_deref().unwrap_or_default()
-                    )
-                })
-                .unwrap_or_default();
-            format!(
-                "{}: {} / {}{}",
-                check.name,
-                check.status,
-                check.conclusion.as_deref().unwrap_or("pending"),
-                details
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let issue = linked_issue
-        .map(|issue| {
-            format!(
-                "#{} {}\n{}",
-                issue.number,
-                issue.title,
-                issue.body.as_deref().unwrap_or_default()
-            )
-        })
-        .unwrap_or_else(|| "(none)".to_owned());
-    format!(
-        "PR #{}: {}\nDescription:\n{}\n\nExisting checks:\n{}\n\nLinked issue:\n{}\n\nTrusted global instructions:\n{}",
-        pull_request.number,
-        pull_request.title,
-        pull_request.body.as_deref().unwrap_or_default(),
-        if checks.is_empty() { "(none)" } else { &checks },
-        issue,
-        config.instructions.join("\n")
-    )
 }
 
 fn required<'a>(value: Option<&'a str>, name: &str) -> Result<&'a str> {
