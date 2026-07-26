@@ -280,15 +280,10 @@ fn parse_agent_reply(raw: &str) -> Result<AgentReply> {
 }
 
 fn normalize_reaction(reaction: Option<&str>) -> String {
-    match reaction
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes" => {
-            reaction.unwrap_or("eyes").trim().to_owned()
-        }
+    let normalized = reaction.unwrap_or_default().trim().to_ascii_lowercase();
+
+    match normalized.as_str() {
+        "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes" => normalized,
         _ => "eyes".to_owned(),
     }
 }
