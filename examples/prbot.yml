@@ -9,14 +9,15 @@ on:
     types: [created]
 
 permissions:
+  checks: read
   contents: read
   pull-requests: write
   issues: write
 
 jobs:
   review:
-    # Skip bot comments to avoid feedback loops.
-    if: ${{ github.event.sender.type != 'Bot' }}
+    # PRBot performs the authoritative owner permission check before any LLM call.
+    if: ${{ github.event_name == 'pull_request' || (github.event.issue.pull_request && github.event.sender.type != 'Bot') }}
     runs-on: ubuntu-latest
     steps:
       - name: Run PRBot

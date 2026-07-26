@@ -7,11 +7,14 @@ on:
   workflow_dispatch:
 
 permissions:
+  checks: read
   contents: read
   pull-requests: write
+  issues: write
 
 jobs:
   dry-run:
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,3 +26,16 @@ jobs:
           openrouter_api_key: "unused-in-dry-run"
           github_token: ${{ secrets.GITHUB_TOKEN }}
           dry_run: "true"
+
+  container-smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Action container
+        run: docker build -t prbot-self-test .
+
+      - name: Smoke CLI in runtime image
+        run: docker run --rm --entrypoint prbot prbot-self-test version
