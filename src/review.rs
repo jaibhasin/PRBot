@@ -143,7 +143,17 @@ async fn run_code_quality_review(
     let files = github.list_pull_request_files(pr_number).await?;
     let selected_files = select_review_files(&files);
     if selected_files.is_empty() {
-        println!("No reviewable source changes found in {repository}#{pr_number}");
+        let summary = format!(
+            "<!-- prbot-code-quality -->\n\
+**PRBot code-quality review**\n\n\
+No reviewable source changes found in `{repository}#{pr_number}`.\n\
+PRBot currently reviews common source/config files (for example `.ts`, `.js`, `.rs`, `.py`) and skips things like pure CSS-only diffs, lockfiles, and generated/vendor paths."
+        );
+        let posted = github.create_issue_comment(pr_number, &summary).await?;
+        println!(
+            "No reviewable source changes; posted summary comment #{}",
+            posted.id
+        );
         return Ok(());
     }
 
@@ -154,8 +164,10 @@ async fn run_code_quality_review(
     let commit_id = pull_request.head.sha;
 
     let mut posted = 0;
+    let mut skipped = 0;
     for finding in findings.into_iter().take(MAX_FINDINGS) {
         if !is_valid_finding(&finding, &selected_files) {
+            skipped += 1;
             println!(
                 "Skipping invalid model finding for {}:{} (must reference an added line)",
                 finding.path, finding.line
@@ -184,7 +196,34 @@ async fn run_code_quality_review(
         posted += 1;
     }
 
-    println!("Code-quality agent posted {posted} inline comment(s)");
+    let file_list = selected_files
+        .iter()
+        .map(|file| format!("- `{}`", file.filename))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let summary = if posted == 0 {
+        format!(
+            "<!-- prbot-code-quality -->\n\
+**PRBot code-quality review**\n\n\
+Looks fine from a high-confidence pass.\n\
+No inline findings to post for `{repository}#{pr_number}`.\n\n\
+Reviewed files:\n{file_list}\n\n\
+_Skipped {skipped} invalid/unanchored model suggestion(s)._"
+        )
+    } else {
+        format!(
+            "<!-- prbot-code-quality -->\n\
+**PRBot code-quality review**\n\n\
+Posted **{posted}** inline finding(s) on `{repository}#{pr_number}`.\n\n\
+Reviewed files:\n{file_list}\n\n\
+_Skipped {skipped} invalid/unanchored model suggestion(s)._"
+        )
+    };
+    let summary_comment = github.create_issue_comment(pr_number, &summary).await?;
+    println!(
+        "Code-quality agent posted {posted} inline comment(s) and summary #{}",
+        summary_comment.id
+    );
     Ok(())
 }
 
@@ -251,6 +290,10 @@ fn is_reviewable_source_file(file: &PullRequestFile) -> bool {
             | "yaml"
             | "yml"
             | "toml"
+            | "css"
+            | "scss"
+            | "sass"
+            | "less"
     );
     supported
         && file.status != "removed"
