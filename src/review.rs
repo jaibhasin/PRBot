@@ -328,6 +328,9 @@ fn added_line_numbers(patch: &str) -> Vec<u64> {
                     .and_then(|value| value.parse().ok())
                     .unwrap_or(0);
             }
+        } else if line.starts_with('\\') {
+            // "\ No newline at end of file" markers describe the previous
+            // line and do not correspond to a line in either file.
         } else if line.starts_with('+') && !line.starts_with("+++") {
             added.push(line_number);
             line_number += 1;
@@ -648,6 +651,13 @@ mod tests {
 
         assert!(is_valid_finding(&valid, &files));
         assert!(!is_valid_finding(&invalid_line, &files));
+    }
+
+    #[test]
+    fn ignores_no_newline_at_end_of_file_markers_when_counting_added_lines() {
+        let patch = "@@ -1,2 +1,2 @@\n context\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file";
+
+        assert_eq!(added_line_numbers(patch), vec![2]);
     }
 
     #[test]
