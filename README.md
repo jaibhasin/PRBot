@@ -4,9 +4,20 @@ Multi-agent PR reviewer for GitHub.
 Runs as a GitHub Action.
 Uses OpenRouter (or compatible LLM APIs) for reviews.
 
-Status: early scaffold (`v0.1.0`).
-Review agents are not implemented yet.
-The Action packaging and CLI entrypoints are ready.
+Status: early implementation (`v0.1.0`).
+The first agent is a code-quality reviewer.
+It sends reviewable changed source patches to OpenRouter and posts only validated inline findings that target added lines.
+Pull request conversation replies are also supported.
+
+## Code-quality reviewer
+
+On pull request events, PRBot fetches changed files from GitHub and selects up to 25 reviewable source files with a combined patch budget of 80,000 characters.
+It excludes deleted files, dependency locks, generated code, vendored code, and minified JavaScript.
+The model receives the selected unified diffs and must return structured findings with a file, an added-line number, severity, and explanation.
+PRBot rejects findings that do not point at an added line in the submitted diff before creating an inline GitHub review comment.
+
+This makes the first reviewer useful and safe, but it is intentionally narrower than mature products such as CodeRabbit or Codex review.
+Those products improve precision through repository-wide context, language-aware static analysis, test and CI signals, historical feedback, rule packs, and stronger multi-pass or tool-using review models.
 
 ## Install in another repository
 
