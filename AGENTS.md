@@ -1,17 +1,54 @@
 # Agent instructions
 
-These are common instructions for your agents across all scenarios.
+These are common instructions for agents working in this repo.
 
-## General Guidelines
+## General guidelines
 
-- Never use the em dash "—". Use plain dash "-" instead
-- When writing commit messages, NEVER auto-add your agent name as co-author
-- When writing or substantially editing long Markdown files, put each full sentence on its own line. Preserve normal Markdown structure, but avoid wrapping multiple sentences onto one physical line.
-- When making technical decisions, do not give much weight to development cost. Instead, prefer quality, simplicity, robustness, scalability, and long term maintainability.
-- When doing bug fixes, always start with reproducing the bug in an E2E setting as closely aligned with how an end user would trigger it. This makes sure you find the real problem so your fix will actually solve it.
-- When end-to-end testing a product, be picky about the UI you see and be obsessed with pixel perfection. If something clearly looks off, even if it is not directly related to what you are doing, try to get it fixed along the way.
-- Apply that same high standard to engineering excellence: lint, test failures, and test flakiness. If you see one, even if it is not caused by what you are working on right now, still get it fixed.
+- Never use the em dash "—". Use plain dash "-" instead.
+- When writing commit messages, NEVER auto-add your agent name as co-author.
+- When writing or substantially editing long Markdown files, put each full sentence on its own line.
+  Preserve normal Markdown structure, but avoid wrapping multiple sentences onto one physical line.
+- When making technical decisions, prefer quality, simplicity, robustness, scalability, and long-term maintainability over short-term development speed.
+- When doing bug fixes, reproduce the bug in an end-to-end way first (CLI and/or GitHub Action path), as close as possible to how a user would hit it.
+- Apply a high standard to engineering excellence: lint, test failures, and flaky tests.
+  If you see one, even if it is not caused by your current change, fix it along the way.
 - Prefer frequent, small commits while writing code.
-  Commit after each meaningful unit of work (for example: one fix, one feature slice, one refactor step).
+  Commit after each meaningful unit of work (one fix, one feature slice, one refactor step).
   More commits are better than one large commit at the end.
 
+## Repo architecture
+
+PRBot is a Rust CLI wrapped as a GitHub Action.
+
+Flow:
+
+1. A consumer workflow calls this Action.
+2. Docker starts `entrypoint.sh`.
+3. `entrypoint.sh` runs `prbot review`.
+4. The CLI talks to GitHub and (later) OpenRouter, then posts PR feedback.
+
+Important paths:
+
+- `src/main.rs` - CLI entrypoint and subcommands
+- `src/review.rs` - review orchestration (args, PR resolution, agent flow)
+- `src/github.rs` - GitHub API helpers (diff, comments, reviews)
+- `action.yml` - Action inputs and metadata
+- `Dockerfile` - builds/runs the binary in Actions
+- `entrypoint.sh` - maps Action inputs to CLI flags/env
+- `examples/prbot.yml` - copy-paste workflow for other repos
+- `.github/workflows/` - CI and self-test for this repo
+
+Coding guidance:
+
+- Put product logic in `src/`.
+- Touch `action.yml` / `Dockerfile` / `entrypoint.sh` only when Action inputs or runtime wiring change.
+- Keep `main.rs` thin: parse CLI, dispatch, exit.
+- Prefer new modules over growing `review.rs` forever (for example `openrouter.rs`, `agents/`).
+
+## File size limits
+
+- Prefer keeping Rust source files under about 300 lines.
+- If a file approaches 500 lines, split it before adding more features.
+- Good split boundaries: GitHub client, LLM client, prompts/agents, comment formatting, CLI args.
+- Exceptions are allowed for generated code or dense static tables.
+  If you use an exception, note why in the commit message or a short code comment.
