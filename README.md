@@ -35,7 +35,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: YOUR_GITHUB_USER/prbot@v0.1.0
+      - uses: jaibhasin/prbot@v0.1.0
         with:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -61,7 +61,7 @@ Release checklist:
 1. Bump `version` in `Cargo.toml`.
 2. Commit the change.
 3. Tag: `git tag v0.1.0 && git push origin v0.1.0`
-4. Users install with `uses: YOUR_GITHUB_USER/prbot@v0.1.0`
+4. Users install with `uses: jaibhasin/prbot@v0.1.0`
 
 ## Local CLI
 
