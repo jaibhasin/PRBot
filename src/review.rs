@@ -1,9 +1,12 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+
+const OPENROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_MODEL: &str = "deepseek/deepseek-v4-flash";
 
 /// Arguments for the `review` command.
 #[derive(Debug, Parser)]
@@ -66,11 +69,83 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
         bail!("missing --openrouter-api-key or OPENROUTER_API_KEY (or pass --dry-run)");
     }
 
-    // Placeholder until agents + GitHub/OpenRouter clients are wired up.
     println!("prbot review: repository={repository} pr=#{pr_number} dry_run={dry_run}");
-    println!("Review agents are not implemented yet. Scaffold is ready.");
+
+    if !dry_run {
+        let api_key = args
+            .openrouter_api_key
+            .as_deref()
+            .expect("OpenRouter API key was validated above");
+        let response = call_openrouter(api_key, &repository, pr_number).await?;
+        println!("OpenRouter response: {response}");
+    }
 
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct ChatCompletionRequest<'a> {
+    model: &'static str,
+    messages: [ChatMessage<'a>; 1],
+}
+
+#[derive(Debug, Serialize)]
+struct ChatMessage<'a> {
+    role: &'static str,
+    content: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionResponse {
+    choices: Vec<ChatChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatChoice {
+    message: ChatMessageResponse,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatMessageResponse {
+    content: String,
+}
+
+async fn call_openrouter(api_key: &str, repository: &str, pr_number: u64) -> Result<String> {
+    let prompt = format!("Review pull request {repository}#{pr_number}.");
+    let request = ChatCompletionRequest {
+        model: OPENROUTER_MODEL,
+        messages: [ChatMessage {
+            role: "user",
+            content: &prompt,
+        }],
+    };
+
+    let response = reqwest::Client::new()
+        .post(OPENROUTER_URL)
+        .bearer_auth(api_key)
+        .json(&request)
+        .send()
+        .await
+        .context("failed to call OpenRouter")?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("failed to read OpenRouter response")?;
+
+    if !status.is_success() {
+        bail!("OpenRouter returned {status}: {body}");
+    }
+
+    let completion: ChatCompletionResponse =
+        serde_json::from_str(&body).context("failed to parse OpenRouter response")?;
+    completion
+        .choices
+        .into_iter()
+        .next()
+        .map(|choice| choice.message.content)
+        .ok_or_else(|| anyhow::anyhow!("OpenRouter response contained no choices"))
 }
 
 fn env_flag(name: &str) -> bool {
