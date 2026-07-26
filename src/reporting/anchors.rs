@@ -1,0 +1,168 @@
+use crate::types::{CandidateFinding, ChangedFile, DiffLine, DiffSide, ResolvedFinding};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
+
+pub fn resolve_findings(
+    candidates: Vec<CandidateFinding>,
+    files: &[ChangedFile],
+) -> (Vec<ResolvedFinding>, usize) {
+    let total = candidates.len();
+    let resolved = candidates
+        .into_iter()
+        .filter_map(|candidate| resolve_finding(candidate, files))
+        .collect::<Vec<_>>();
+    let skipped = total.saturating_sub(resolved.len());
+    (resolved, skipped)
+}
+
+pub fn deduplicate(
+    findings: Vec<ResolvedFinding>,
+    previous: &BTreeSet<String>,
+) -> Vec<ResolvedFinding> {
+    let mut seen = previous.clone();
+    findings
+        .into_iter()
+        .filter(|finding| seen.insert(finding.fingerprint.clone()))
+        .collect()
+}
+
+fn resolve_finding(candidate: CandidateFinding, files: &[ChangedFile]) -> Option<ResolvedFinding> {
+    let file = files.iter().find(|file| file.path == candidate.path)?;
+    let anchor_lines = candidate.anchor.lines().collect::<Vec<_>>();
+    if anchor_lines.is_empty() || anchor_lines.iter().any(|line| line.is_empty()) {
+        return None;
+    }
+    let mut matches = Vec::new();
+    for hunk in &file.hunks {
+        for start in 0..hunk.lines.len() {
+            if matches_anchor(&hunk.lines, start, &anchor_lines, candidate.side) {
+                let end = if let Some(end_anchor) = candidate.end_anchor.as_deref() {
+                    find_end(&hunk.lines, start, end_anchor, candidate.side)?
+                } else {
+                    start + anchor_lines.len() - 1
+                };
+                let start_line = side_line(&hunk.lines[start], candidate.side)?;
+                let line = side_line(&hunk.lines[end], candidate.side)?;
+                matches.push((start_line, line));
+            }
+        }
+    }
+    if matches.len() != 1 {
+        return None;
+    }
+    let (start, line) = matches[0];
+    let fingerprint = fingerprint(&candidate);
+    let side = candidate.side;
+    Some(ResolvedFinding {
+        candidate,
+        line: Some(line),
+        start_line: (start != line).then_some(start),
+        side,
+        fingerprint,
+    })
+}
+
+fn matches_anchor(lines: &[DiffLine], start: usize, anchor: &[&str], side: DiffSide) -> bool {
+    if start + anchor.len() > lines.len() {
+        return false;
+    }
+    lines[start..start + anchor.len()]
+        .iter()
+        .zip(anchor)
+        .all(|(line, expected)| line.content == *expected && side_matches(line.side, side))
+}
+
+fn find_end(lines: &[DiffLine], start: usize, end_anchor: &str, side: DiffSide) -> Option<usize> {
+    lines
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find(|(_, line)| line.content == end_anchor && side_matches(line.side, side))
+        .map(|(index, _)| index)
+}
+
+fn side_matches(line_side: DiffSide, requested: DiffSide) -> bool {
+    line_side == requested || line_side == DiffSide::Context
+}
+
+fn side_line(line: &DiffLine, side: DiffSide) -> Option<u64> {
+    match side {
+        DiffSide::Left => line.old_line,
+        DiffSide::Right | DiffSide::Context => line.new_line,
+    }
+}
+
+fn fingerprint(candidate: &CandidateFinding) -> String {
+    let normalized = format!(
+        "{}\n{:?}\n{:?}\n{}\n{}",
+        candidate.path,
+        candidate.category,
+        candidate.priority,
+        candidate
+            .anchor
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+        candidate
+            .title
+            .to_ascii_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    format!("{:x}", Sha256::digest(normalized.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{DiffHunk, FileStatus, FindingCategory, Priority};
+
+    #[test]
+    fn resolves_exact_right_and_left_anchors() {
+        let file = ChangedFile {
+            path: "src/main.rs".to_owned(),
+            old_path: None,
+            status: FileStatus::Modified,
+            patch: String::new(),
+            hunks: vec![DiffHunk {
+                header: "@@ -1 +1 @@".to_owned(),
+                old_start: 1,
+                new_start: 1,
+                lines: vec![
+                    DiffLine {
+                        side: DiffSide::Left,
+                        old_line: Some(1),
+                        new_line: None,
+                        content: "old".to_owned(),
+                    },
+                    DiffLine {
+                        side: DiffSide::Right,
+                        old_line: None,
+                        new_line: Some(1),
+                        content: "new".to_owned(),
+                    },
+                ],
+            }],
+        };
+        let finding = candidate(DiffSide::Right, "new");
+        let (resolved, skipped) = resolve_findings(vec![finding], &[file]);
+        assert_eq!(skipped, 0);
+        assert_eq!(resolved[0].line, Some(1));
+    }
+
+    fn candidate(side: DiffSide, anchor: &str) -> CandidateFinding {
+        CandidateFinding {
+            path: "src/main.rs".to_owned(),
+            side,
+            anchor: anchor.to_owned(),
+            end_anchor: None,
+            priority: Priority::P1,
+            category: FindingCategory::Correctness,
+            title: "Bug".to_owned(),
+            body: "Impact".to_owned(),
+            evidence: Vec::new(),
+            confidence: 0.9,
+        }
+    }
+}
