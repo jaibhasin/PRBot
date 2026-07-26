@@ -1,0 +1,30 @@
+name: "PRBot"
+description: "Multi-agent PR reviewer powered by OpenRouter, runs as a GitHub Action."
+author: "PRBot contributors"
+
+branding:
+  icon: "check-circle"
+  color: "blue"
+
+inputs:
+  openrouter_api_key:
+    description: "OpenRouter API key used for LLM review calls."
+    required: true
+  github_token:
+    description: "GitHub token with permission to read the PR and post comments. If omitted, the workflow job token (GITHUB_TOKEN) is used."
+    required: false
+    default: ""
+  pr_number:
+    description: "Pull request number. When empty, PRBot reads it from the GitHub event payload."
+    required: false
+    default: ""
+  dry_run:
+    description: "If true, do not call the LLM or post comments."
+    required: false
+    default: "false"
+
+runs:
+  using: "docker"
+  image: "Dockerfile"
+  args:
+    - "review"

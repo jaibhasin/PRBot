@@ -1,0 +1,28 @@
+# Example workflow for repositories that install PRBot.
+# Copy this file to: .github/workflows/prbot.yml
+name: PRBot
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    # Skip bot comments to avoid feedback loops.
+    if: ${{ github.event.sender.type != 'Bot' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run PRBot
+        # Replace with your published repo and version tag after the first release.
+        uses: your-github-user/prbot@v0.1.0
+        with:
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          # Optional. If omitted, the job's GITHUB_TOKEN is used.
+          github_token: ${{ secrets.GITHUB_TOKEN }}

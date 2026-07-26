@@ -1,0 +1,25 @@
+# Dogfood this Action against PRs in the PRBot repo itself.
+name: PRBot self-test
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run PRBot (dry run)
+        uses: ./
+        with:
+          openrouter_api_key: "unused-in-dry-run"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          dry_run: "true"
