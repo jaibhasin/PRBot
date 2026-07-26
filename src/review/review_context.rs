@@ -35,12 +35,19 @@ pub async fn prepare_snapshot(
     })
     .await
     .context("repository fetch task failed")??;
-    if load_trusted_config {
-        apply_trusted_repository_config(&repository, config)?;
-    }
-    let filter = config.path_filter()?;
-    let mut manifest = build_manifest(&repository, &filter)?;
-    build_context(&repository, &mut manifest)?;
+    let mut working_config = config.clone();
+    let (repository, manifest, working_config) = tokio::task::spawn_blocking(move || {
+        if load_trusted_config {
+            apply_trusted_repository_config(&repository, &mut working_config)?;
+        }
+        let filter = working_config.path_filter()?;
+        let mut manifest = build_manifest(&repository, &filter)?;
+        build_context(&repository, &mut manifest)?;
+        Ok::<_, anyhow::Error>((repository, manifest, working_config))
+    })
+    .await
+    .context("repository context task failed")??;
+    *config = working_config;
     let checks = github
         .list_check_runs(&pull_request.head.sha)
         .await

@@ -1,9 +1,11 @@
 use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
+
+use super::safety::{truncate_chars, validate_path, validate_ref};
 
 pub struct GitRepository {
     _temp: Option<TempDir>,
@@ -66,7 +68,7 @@ impl GitRepository {
                 head_sha.trim()
             );
         }
-        let base_sha = merge_base(&git_dir, Some(&auth))?;
+        let base_sha = merge_base(&git_dir, Some(&auth), &base_spec, &head_spec)?;
         Ok(Self {
             _temp: Some(temp),
             git_dir,
@@ -179,7 +181,12 @@ impl GitRepository {
     }
 }
 
-fn merge_base(git_dir: &Path, auth: Option<&str>) -> Result<String> {
+fn merge_base(
+    git_dir: &Path,
+    auth: Option<&str>,
+    base_spec: &str,
+    head_spec: &str,
+) -> Result<String> {
     if let Ok(value) = output_git(
         git_dir,
         ["merge-base", "refs/prbot/base", "refs/prbot/head"],
@@ -187,9 +194,39 @@ fn merge_base(git_dir: &Path, auth: Option<&str>) -> Result<String> {
     ) {
         return Ok(value.trim().to_owned());
     }
+    for deepen in [200, 500, 1_000] {
+        let deepen_arg = format!("--deepen={deepen}");
+        run_git_dir(
+            git_dir,
+            [
+                "fetch",
+                "--no-tags",
+                deepen_arg.as_str(),
+                "origin",
+                base_spec,
+                head_spec,
+            ],
+            auth,
+            "deepen pull request history",
+        )?;
+        if let Ok(value) = output_git(
+            git_dir,
+            ["merge-base", "refs/prbot/base", "refs/prbot/head"],
+            "find merge base",
+        ) {
+            return Ok(value.trim().to_owned());
+        }
+    }
     run_git_dir(
         git_dir,
-        ["fetch", "--no-tags", "--unshallow", "origin"],
+        [
+            "fetch",
+            "--no-tags",
+            "--unshallow",
+            "origin",
+            base_spec,
+            head_spec,
+        ],
         auth,
         "deepen pull request history",
     )?;
@@ -251,38 +288,4 @@ fn parse_output(output: Output, operation: &str) -> Result<String> {
         );
     }
     String::from_utf8(output.stdout).with_context(|| format!("{operation} returned non-UTF-8 data"))
-}
-
-fn validate_ref(value: &str) -> Result<()> {
-    if value.is_empty()
-        || value.starts_with('-')
-        || value.contains("..")
-        || value.contains(char::is_whitespace)
-        || value
-            .chars()
-            .any(|character| !character.is_ascii_alphanumeric() && !"/._-".contains(character))
-    {
-        bail!("unsafe Git ref '{value}'");
-    }
-    Ok(())
-}
-
-fn validate_path(value: &str) -> Result<()> {
-    let path = Path::new(value);
-    if path.is_absolute()
-        || path
-            .components()
-            .any(|part| matches!(part, Component::ParentDir | Component::RootDir))
-    {
-        bail!("repository path escapes root: '{value}'");
-    }
-    Ok(())
-}
-
-fn truncate_chars(value: &str, max_chars: usize) -> String {
-    let mut result = value.chars().take(max_chars).collect::<String>();
-    if result.len() < value.len() {
-        result.push_str("\n...[truncated]");
-    }
-    result
 }

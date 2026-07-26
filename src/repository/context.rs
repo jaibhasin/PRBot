@@ -7,12 +7,20 @@ use std::path::Path;
 const MAX_RELATED_PER_FILE: usize = 12;
 
 pub fn build_context(repository: &GitRepository, manifest: &mut ReviewManifest) -> Result<()> {
-    let tree = repository.list_tree("head")?;
+    let mut tree = repository.list_tree("head")?;
+    if tree.len() > 100_000 {
+        eprintln!(
+            "repository tree has {} paths; limiting context discovery to 100000",
+            tree.len()
+        );
+        tree.truncate(100_000);
+    }
     let changed_paths = manifest
         .files
         .iter()
         .map(|file| file.path.clone())
         .collect::<BTreeSet<_>>();
+    let symbol_search_limit = if manifest.files.len() > 100 { 3 } else { 12 };
     let mut related_by_path = BTreeMap::new();
 
     for file in &manifest.files {
@@ -48,7 +56,7 @@ pub fn build_context(repository: &GitRepository, manifest: &mut ReviewManifest) 
             }
         }
 
-        for symbol in signals.symbols.iter().take(12) {
+        for symbol in signals.symbols.iter().take(symbol_search_limit) {
             if let Ok(matches) = repository.search("head", symbol, 100) {
                 for path in paths_from_grep(repository.head_sha(), &matches) {
                     if path != file.path && !changed_paths.contains(&path) {
@@ -59,6 +67,38 @@ pub fn build_context(repository: &GitRepository, manifest: &mut ReviewManifest) 
                             &format!("references changed symbol {symbol}"),
                         );
                     }
+                }
+            }
+        }
+
+        let mut first_hop = scores
+            .iter()
+            .map(|(path, (score, _))| (path.clone(), *score))
+            .collect::<Vec<_>>();
+        first_hop.sort_by_key(|(_, score)| std::cmp::Reverse(*score));
+        for (neighbor, _) in first_hop.into_iter().take(5) {
+            let neighbor_source = repository
+                .read_file("head", &neighbor, 100_000)
+                .unwrap_or_default();
+            let neighbor_signals = source_signals(&neighbor, &neighbor_source);
+            for candidate in &tree {
+                if candidate == &file.path
+                    || candidate == &neighbor
+                    || changed_paths.contains(candidate)
+                {
+                    continue;
+                }
+                if neighbor_signals
+                    .imports
+                    .iter()
+                    .any(|import| import_matches_path(import, candidate))
+                {
+                    add_score(
+                        &mut scores,
+                        candidate,
+                        4,
+                        &format!("two-hop import through {neighbor}"),
+                    );
                 }
             }
         }

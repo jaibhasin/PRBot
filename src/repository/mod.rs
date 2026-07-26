@@ -1,6 +1,7 @@
 mod context;
 mod diff;
 mod git;
+mod safety;
 mod syntax;
 mod tools;
 

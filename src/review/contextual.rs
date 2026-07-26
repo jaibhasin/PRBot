@@ -167,12 +167,8 @@ pub async fn answer_command(
     command_id: u64,
     question: &str,
     config: &ReviewConfig,
+    budget: Arc<Budget>,
 ) -> Result<()> {
-    let budget = Arc::new(Budget::new(
-        config.max_review_minutes,
-        config.max_input_tokens,
-        config.max_cost_usd,
-    ));
     let client = LlmClient::new(
         api_key,
         env::var("OPENROUTER_URL").ok(),

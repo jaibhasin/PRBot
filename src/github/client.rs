@@ -60,12 +60,17 @@ impl GitHubClient {
 
     pub async fn is_repository_admin(&self, login: &str) -> Result<bool> {
         let encoded = login.replace('/', "%2F");
-        let result: PermissionResponse = self
-            .get_json(
+        let response = self
+            .send_get_with_retry(
                 &format!("collaborators/{encoded}/permission"),
                 "check repository permission",
             )
             .await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(false);
+        }
+        let result: PermissionResponse =
+            parse_json(response, "check repository permission").await?;
         Ok(result.permission == "admin")
     }
 

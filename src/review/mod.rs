@@ -93,6 +93,13 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
     if !dry_run && args.openrouter_api_key.as_deref().unwrap_or("").is_empty() {
         bail!("missing --openrouter-api-key or OPENROUTER_API_KEY");
     }
+    let budget = (!dry_run).then(|| {
+        Arc::new(Budget::new(
+            config.max_review_minutes,
+            config.max_input_tokens,
+            config.max_cost_usd,
+        ))
+    });
 
     let comments = github.list_issue_comments(pr_number).await?;
     if let Some(comment_id) = comment_id {
@@ -105,7 +112,7 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
         }
     }
 
-    let mut snapshot = review_context::prepare_snapshot(
+    let prepare = review_context::prepare_snapshot(
         &github,
         &repository,
         &token,
@@ -113,8 +120,14 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
         &pull_request,
         &mut config,
         true,
-    )
-    .await?;
+    );
+    let mut snapshot = if let Some(budget) = &budget {
+        tokio::time::timeout(budget.remaining_time()?, prepare)
+            .await
+            .context("repository context preparation exceeded review deadline")??
+    } else {
+        prepare.await?
+    };
     if automatic && !config.auto_review_owner_authored {
         println!("PRBot automatic review is disabled by trusted .prbot.toml");
         return Ok(());
@@ -139,11 +152,7 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
         .context("OpenRouter API key disappeared after validation")?;
     match command {
         Command::Review => {
-            let budget = Arc::new(Budget::new(
-                config.max_review_minutes,
-                config.max_input_tokens,
-                config.max_cost_usd,
-            ));
+            let budget = budget.context("review budget missing outside dry run")?;
             let mut reviewed_pull_request = pull_request;
             for attempt in 0..=1 {
                 match contextual::run_review(
@@ -169,7 +178,7 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
                             updated.head.sha
                         );
                         reviewed_pull_request = updated;
-                        snapshot = review_context::prepare_snapshot(
+                        let prepare = review_context::prepare_snapshot(
                             &github,
                             &repository,
                             &token,
@@ -177,8 +186,10 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
                             &reviewed_pull_request,
                             &mut config,
                             false,
-                        )
-                        .await?;
+                        );
+                        snapshot = tokio::time::timeout(budget.remaining_time()?, prepare)
+                            .await
+                            .context("stale-head retry preparation exceeded review deadline")??;
                     }
                     contextual::ReviewResult::Stale(updated) => {
                         bail!(
@@ -201,6 +212,7 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
                 comment_id.context("interactive command missing comment id")?,
                 &question,
                 &config,
+                budget.context("command budget missing outside dry run")?,
             )
             .await
         }
@@ -215,6 +227,7 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
                 comment_id.context("interactive command missing comment id")?,
                 &format!("Explain this PRBot finding in detail: {target}"),
                 &config,
+                budget.context("command budget missing outside dry run")?,
             )
             .await
         }

@@ -94,6 +94,27 @@ async fn publishes_one_formal_review_with_multiline_comments() {
     server.join().expect("server");
 }
 
+#[tokio::test]
+async fn treats_non_collaborator_not_found_as_unauthorized() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut request = [0_u8; 8192];
+        let _ = stream.read(&mut request).expect("read");
+        stream
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .expect("write");
+    });
+    let client = GitHubClient::with_base_url("token", "octocat/hello", format!("http://{address}"))
+        .expect("client");
+    assert!(!client
+        .is_repository_admin("outsider")
+        .await
+        .expect("permission"));
+    server.join().expect("server");
+}
+
 fn response(body: &str, link: Option<&str>) -> String {
     let link = link
         .map(|value| format!("Link: {value}\r\n"))
