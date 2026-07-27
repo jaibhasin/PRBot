@@ -25,17 +25,24 @@ Flow:
 1. A consumer workflow calls this Action.
 2. Docker starts `entrypoint.sh`.
 3. `entrypoint.sh` runs `prbot review`.
-4. The CLI talks to GitHub and (later) OpenRouter, then posts PR feedback.
+4. The CLI talks to GitHub and OpenRouter, runs multi-agent review, then posts PR feedback.
 
 Important paths:
 
 - `src/main.rs` - CLI entrypoint and subcommands
-- `src/review.rs` - review orchestration (args, PR resolution, agent flow)
-- `src/github.rs` - GitHub API helpers (diff, comments, reviews)
+- `src/config.rs` - review config, defaults, and `.prbot.toml` loading
+- `src/types.rs` - shared review, finding, and outcome types
+- `src/review/` - review orchestration (args, events, commands, contextual and legacy engines)
+- `src/agents/` - router, specialist tasks, verifier, and prompts
+- `src/llm.rs` / `src/llm/` - OpenRouter client and token/cost budgets
+- `src/repository/` - ephemeral Git store, diffs, syntax context, and read-only tools
+- `src/reporting/` - anchors, dedupe, and summary comment rendering
+- `src/github/` - GitHub API helpers (diff, comments, reviews, checks)
 - `action.yml` - Action inputs and metadata
 - `Dockerfile` - builds/runs the binary in Actions
 - `entrypoint.sh` - maps Action inputs to CLI flags/env
 - `examples/prbot.yml` - copy-paste workflow for other repos
+- `evals/` - release-gate scorers, fixture catalog, and Qodo harness
 - `.github/workflows/` - CI and self-test for this repo
 
 Coding guidance:
@@ -43,7 +50,8 @@ Coding guidance:
 - Put product logic in `src/`.
 - Touch `action.yml` / `Dockerfile` / `entrypoint.sh` only when Action inputs or runtime wiring change.
 - Keep `main.rs` thin: parse CLI, dispatch, exit.
-- Prefer new modules over growing `review.rs` forever (for example `openrouter.rs`, `agents/`).
+- Prefer new modules over growing large files forever.
+  Good split targets: GitHub client, LLM client, prompts/agents, comment formatting, CLI args, eval scripts.
 
 ## File size limits
 
