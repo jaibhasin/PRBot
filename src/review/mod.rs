@@ -8,8 +8,9 @@ mod review_context;
 mod tests;
 
 use crate::config::{ReviewConfig, ReviewEngine};
-use crate::github::GitHubClient;
+use crate::github::{GitHubClient, IssueComment};
 use crate::llm::Budget;
+use crate::reporting::{parse_summary_state, SUMMARY_MARKER};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use event::Command;
@@ -129,6 +130,14 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
         ))
     });
 
+    let comments = github.list_issue_comments(pr_number).await?;
+    if let Some(comment_id) = comment_id {
+        if is_duplicate_command(&comments, comment_id) {
+            println!("PRBot skipped duplicate command event #{comment_id}");
+            return Ok(());
+        }
+    }
+
     // A command from an authorized owner has been accepted. Select and add an
     // acknowledgement before preparing repository context or starting command work.
     if let (Some(comment_id), Some(api_key), Some(budget)) = (
@@ -145,17 +154,6 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
             Arc::clone(budget),
         )
         .await;
-    }
-
-    let comments = github.list_issue_comments(pr_number).await?;
-    if let Some(comment_id) = comment_id {
-        if comments.iter().any(|item| {
-            item.body
-                .contains(&format!("<!-- prbot-command:{comment_id} -->"))
-        }) {
-            println!("PRBot skipped duplicate command event #{comment_id}");
-            return Ok(());
-        }
     }
 
     let prepare = review_context::prepare_snapshot(
@@ -300,6 +298,21 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
             .await
         }
     }
+}
+
+/// Determines whether an already-published PRBot response or review summary
+/// records that a command comment has been handled.
+fn is_duplicate_command(comments: &[IssueComment], comment_id: u64) -> bool {
+    let marker = format!("<!-- prbot-command:{comment_id} -->");
+    comments
+        .iter()
+        .any(|comment| comment.body.contains(&marker))
+        || comments
+            .iter()
+            .rev()
+            .filter(|comment| comment.body.contains(SUMMARY_MARKER))
+            .filter_map(|comment| parse_summary_state(&comment.body))
+            .any(|state| state.handled_comment_ids.contains(&comment_id))
 }
 
 /// Builds the review configuration from command-line arguments and validates its model settings.

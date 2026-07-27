@@ -193,7 +193,9 @@ impl LlmClient {
     ///     "role": "user",
     ///     "content": "Hello",
     /// })];
-    /// let response = client.completion("model-name", &messages, &[]).await?;
+    /// let response = client
+    ///     .completion("model-name", &messages, &[], 16)
+    ///     .await?;
     /// assert!(!response.choices.is_empty());
     /// # Ok(())
     /// # }
