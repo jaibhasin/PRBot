@@ -11,10 +11,13 @@ SIZE="${BATCH_SIZE:-10}"
 SEED="${BATCH_SEED:-42}"
 ENGINE="${PRBOT_ENGINE:-contextual}"
 LIMIT="${PRBOT_EVAL_LIMIT:-0}"
-CATEGORIZE_MODEL="${PRBOT_EVAL_CATEGORIZE_MODEL:-deepseek/deepseek-v4-flash}"
-JUDGE_MODEL="${PRBOT_EVAL_JUDGE_MODEL:-deepseek/deepseek-v4-flash}"
-export PRBOT_REVIEW_MODEL="${PRBOT_REVIEW_MODEL:-deepseek/deepseek-v4-flash}"
-export PRBOT_VERIFICATION_MODEL="${PRBOT_VERIFICATION_MODEL:-deepseek/deepseek-v4-flash}"
+REVIEW_WORKERS="${PRBOT_EVAL_REVIEW_WORKERS:-3}"
+META_WORKERS="${PRBOT_EVAL_META_WORKERS:-4}"
+CATEGORIZE_MODEL="deepseek/deepseek-v4-flash"
+JUDGE_MODEL="deepseek/deepseek-v4-flash"
+export PRBOT_REVIEW_MODEL="deepseek/deepseek-v4-flash"
+export PRBOT_VERIFICATION_MODEL="deepseek/deepseek-v4-flash"
+export PRBOT_MAX_CONCURRENCY="${PRBOT_MAX_CONCURRENCY:-4}"
 NOTES="${PRBOT_EVAL_NOTES:-}"
 
 if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
@@ -38,19 +41,47 @@ PY
 fi
 
 echo "Using batch: $BATCH_ID"
-python3 categorize_gt.py --batch-id "$BATCH_ID" --model "$CATEGORIZE_MODEL"
+LIMIT_ARGS=()
+if [[ "$LIMIT" != "0" ]]; then
+  LIMIT_ARGS+=(--limit "$LIMIT")
+fi
+
+python3 categorize_gt.py \
+  --batch-id "$BATCH_ID" \
+  --model "$CATEGORIZE_MODEL" \
+  --workers "$META_WORKERS" \
+  "${LIMIT_ARGS[@]}"
 
 if [[ ! -x "$ROOT/target/release/prbot" ]]; then
   (cd "$ROOT" && cargo build --release)
 fi
 
-LIMIT_ARGS=()
-if [[ "$LIMIT" != "0" ]]; then
-  LIMIT_ARGS+=(--limit "$LIMIT")
+python3 run_prbot_batch.py \
+  --batch-id "$BATCH_ID" \
+  --engine "$ENGINE" \
+  --workers "$REVIEW_WORKERS" \
+  "${LIMIT_ARGS[@]}"
+python3 judge_results.py \
+  --batch-id "$BATCH_ID" \
+  --model "$JUDGE_MODEL" \
+  --workers "$META_WORKERS" \
+  "${LIMIT_ARGS[@]}"
+python3 record_run.py \
+  --batch-id "$BATCH_ID" \
+  --engine "$ENGINE" \
+  --categorize-model "$CATEGORIZE_MODEL" \
+  --judge-model "$JUDGE_MODEL" \
+  --review-workers "$REVIEW_WORKERS" \
+  --meta-workers "$META_WORKERS" \
+  --limit "$LIMIT"
+if [[ "$LIMIT" == "0" ]]; then
+  python3 update_scoreboard.py \
+    --batch-id "$BATCH_ID" \
+    --engine "$ENGINE" \
+    --notes "$NOTES"
+else
+  echo "Smoke run: scoreboard update skipped"
 fi
-python3 run_prbot_batch.py --batch-id "$BATCH_ID" --engine "$ENGINE" "${LIMIT_ARGS[@]}"
-python3 judge_results.py --batch-id "$BATCH_ID" --model "$JUDGE_MODEL"
-python3 update_scoreboard.py --batch-id "$BATCH_ID" --engine "$ENGINE" --notes "$NOTES"
 
 echo "Done. See:"
 echo "  $ROOT/evals/qodo/batches/$BATCH_ID/SUMMARY.md"
