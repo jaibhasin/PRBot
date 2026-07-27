@@ -26,7 +26,7 @@ pub(super) async fn verify_findings(
                 system: prompts::verifier_system(),
                 user: &prompt,
                 tools: tool_definitions(),
-                max_steps: 8,
+                max_steps: 6,
                 label: "verifier",
             },
             move |name, arguments| {
