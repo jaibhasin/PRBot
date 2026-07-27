@@ -15,7 +15,7 @@ PRBot does more than send GitHub patch fragments to one model.
 4. It builds a relationship map from imports, symbols, references, matching tests, manifests, and directory structure.
 5. It assigns every eligible changed hunk to a semantic review bundle.
 6. It reviews bundles concurrently with bounded read-only tools.
-7. It runs a cross-bundle audit and independently verifies every candidate finding with a different model.
+7. It runs a cross-bundle audit and independently verifies every candidate finding.
 8. It resolves exact diff anchors, removes duplicates, creates one formal GitHub review, and updates one persistent summary.
 
 Syntax-aware symbol extraction supports Rust, TypeScript, JavaScript, Python, and Go.
@@ -92,8 +92,8 @@ Action inputs are hard ceilings:
 
 | Input | Default | Purpose |
 | --- | ---: | --- |
-| `review_model` | `deepseek/deepseek-v4-pro` | Review and audit model |
-| `verification_model` | `openai/gpt-5.6-luna` | Independent verification model |
+| `review_model` | `deepseek/deepseek-v4-flash` | Review and audit model |
+| `verification_model` | `deepseek/deepseek-v4-flash` | Independent verification model |
 | `max_review_minutes` | `15` | Wall-clock deadline |
 | `max_input_tokens` | `500000` | Total estimated input-token ceiling |
 | `max_cost_usd` | `3.00` | Estimated model-cost ceiling |

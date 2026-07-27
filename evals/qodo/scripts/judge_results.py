@@ -168,7 +168,7 @@ def main() -> int:
     parser.add_argument("--batch-id", required=True)
     parser.add_argument(
         "--model",
-        default=os.environ.get("PRBOT_EVAL_JUDGE_MODEL", "anthropic/claude-sonnet-4.6"),
+        default=os.environ.get("PRBOT_EVAL_JUDGE_MODEL", "deepseek/deepseek-v4-flash"),
     )
     args = parser.parse_args()
     target = batch_dir(args.batch_id)

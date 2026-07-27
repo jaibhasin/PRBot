@@ -2,8 +2,8 @@ use anyhow::{bail, Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
 
-pub const DEFAULT_REVIEW_MODEL: &str = "deepseek/deepseek-v4-pro";
-pub const DEFAULT_VERIFICATION_MODEL: &str = "openai/gpt-5.6-luna";
+pub const DEFAULT_REVIEW_MODEL: &str = "deepseek/deepseek-v4-flash";
+pub const DEFAULT_VERIFICATION_MODEL: &str = "deepseek/deepseek-v4-flash";
 
 #[derive(Clone, Debug)]
 pub struct ReviewConfig {

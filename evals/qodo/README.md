@@ -25,9 +25,11 @@ PRBOT_EVAL_LIMIT=2 ./evals/qodo/scripts/run_batch.sh   # smoke
 Optional:
 
 ```bash
-export PRBOT_EVAL_CATEGORIZE_MODEL=openai/gpt-5.6-luna
-export PRBOT_EVAL_JUDGE_MODEL=anthropic/claude-sonnet-4.6
+export PRBOT_EVAL_CATEGORIZE_MODEL=deepseek/deepseek-v4-flash
+export PRBOT_EVAL_JUDGE_MODEL=deepseek/deepseek-v4-flash
 ```
+
+Defaults use OpenRouter `deepseek/deepseek-v4-flash` for categorizer, judge, review, and verification.
 
 ## Outputs
 

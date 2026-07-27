@@ -298,8 +298,7 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns an error if the engine is invalid, or if the review and verification
-/// models use the same model ID or provider family.
+/// Returns an error if the engine is invalid.
 ///
 /// # Returns
 ///
@@ -323,18 +322,6 @@ fn config_from_args(args: &ReviewArgs) -> Result<ReviewConfig> {
         .filter(|value| !value.is_empty())
     {
         config.verification_model = model.clone();
-    }
-    if config.review_model == config.verification_model {
-        bail!("review_model and verification_model must use different model IDs");
-    }
-    let review_provider = config.review_model.split('/').next().unwrap_or_default();
-    let verifier_provider = config
-        .verification_model
-        .split('/')
-        .next()
-        .unwrap_or_default();
-    if review_provider == verifier_provider {
-        bail!("review_model and verification_model must use different provider families");
     }
     Ok(config)
 }

@@ -18,6 +18,8 @@
 
 ### Changed
 - Default review engine is now `contextual`; `legacy` remains available as a rollback
+- Default review and verification models are both `deepseek/deepseek-v4-flash`
+- Same model/provider is allowed for review and verification
 - Summary comments report incremental mode and reviewed bundle counts
 - Fingerprints for changed paths are cleared on incremental reruns so findings can be revalidated
 

@@ -20,12 +20,12 @@ async fn authorized_review_requires_api_key_before_repository_fetch() {
 }
 
 #[test]
-fn verifier_must_use_a_different_provider_family() {
+fn same_model_is_allowed_for_review_and_verification() {
     let mut args = args("http://127.0.0.1");
-    args.review_model = Some("openai/reviewer".to_owned());
-    args.verification_model = Some("openai/verifier".to_owned());
-    let error = config_from_args(&args).expect_err("same provider");
-    assert!(error.to_string().contains("provider families"));
+    args.review_model = Some("deepseek/deepseek-v4-flash".to_owned());
+    args.verification_model = Some("deepseek/deepseek-v4-flash".to_owned());
+    let config = config_from_args(&args).expect("same model allowed");
+    assert_eq!(config.review_model, config.verification_model);
 }
 
 /// Builds review arguments for a repository pull request using the specified GitHub API endpoint.

@@ -1,0 +1,87 @@
+{
+  "batch_id": "batch-001",
+  "seed": 42,
+  "size": 10,
+  "cases": [
+    {
+      "case_id": "aspnetcore-pr7-001",
+      "repo": "aspnetcore",
+      "repository": "agentic-review-benchmarks/aspnetcore",
+      "pr_number": 7,
+      "pr_url_to_review": "https://github.com/agentic-review-benchmarks/aspnetcore/pull/7",
+      "num_of_issues": 4
+    },
+    {
+      "case_id": "Ghost-pr2-002",
+      "repo": "Ghost",
+      "repository": "agentic-review-benchmarks/Ghost",
+      "pr_number": 2,
+      "pr_url_to_review": "https://github.com/agentic-review-benchmarks/Ghost/pull/2",
+      "num_of_issues": 4
+    },
+    {
+      "case_id": "Ghost-pr13-003",
+      "repo": "Ghost",
+      "repository": "agentic-review-benchmarks/Ghost",
+      "pr_number": 13,
+      "pr_url_to_review": "https://github.com/agentic-review-benchmarks/Ghost/pull/13",
+      "num_of_issues": 4
+    },
+    {
+      "case_id": "Ghost-pr10-004",
+      "repo": "Ghost",
+      "repository": "agentic-review-benchmarks/Ghost",
+      "pr_number": 10,
+      "pr_url_to_review": "https://github.com/agentic-review-benchmarks/Ghost/pull/10",
+      "num_of_issues": 6
+    },
+    {
+      "case_id": "prefect-pr3-005",
+      "repo": "prefect",
+      "repository": "agentic-review-benchmarks/prefect",
+      "pr_number": 3,
+      "pr_url_to_review": "https://github.com/agentic-review-benchmarks/prefect/pull/3",
+      "num_of_issues": 4
+    },
+    {
+      "case_id": "dify-pr3-006",
+      "repo": "dify",
+      "repository": "agentic-review-benchmarks/dify",
+      "pr_number": 3,
+      "pr_url_to_review": "https://github.com/agentic-review-benchmarks/dify/pull/3",
+      "num_of_issues": 7
+    },
+    {
+      "case_id": "tauri-pr3-007",
+      "repo": "tauri",
+      "repository": "agentic-review-benchmarks/tauri",
+      "pr_number": 3,
+      "pr_url_to_review": "https://github.com/agentic-review-benchmarks/tauri/pull/3",
+      "num_of_issues": 4
+    },
+    {
+      "case_id": "tauri-pr8-008",
+      "repo": "tauri",
+      "repository": "agentic-review-benchmarks/tauri",
+      "pr_number": 8,
+      "pr_url_to_review": "https://github.com/agentic-review-benchmarks/tauri/pull/8",
+      "num_of_issues": 5
+    },
+    {
+      "case_id": "dify-pr6-009",
+      "repo": "dify",
+      "repository": "agentic-review-benchmarks/dify",
+      "pr_number": 6,
+      "pr_url_to_review": "https://github.com/agentic-review-benchmarks/dify/pull/6",
+      "num_of_issues": 5
+    },
+    {
+      "case_id": "Ghost-pr8-010",
+      "repo": "Ghost",
+      "repository": "agentic-review-benchmarks/Ghost",
+      "pr_number": 8,
+      "pr_url_to_review": "https://github.com/agentic-review-benchmarks/Ghost/pull/8",
+      "num_of_issues": 7
+    }
+  ]
+}

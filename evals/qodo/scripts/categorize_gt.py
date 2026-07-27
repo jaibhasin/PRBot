@@ -83,7 +83,7 @@ def main() -> int:
     parser.add_argument("--batch-id", required=True)
     parser.add_argument(
         "--model",
-        default=os.environ.get("PRBOT_EVAL_CATEGORIZE_MODEL", "openai/gpt-5.6-luna"),
+        default=os.environ.get("PRBOT_EVAL_CATEGORIZE_MODEL", "deepseek/deepseek-v4-flash"),
     )
     args = parser.parse_args()
     target = batch_dir(args.batch_id)

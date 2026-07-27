@@ -11,8 +11,10 @@ SIZE="${BATCH_SIZE:-10}"
 SEED="${BATCH_SEED:-42}"
 ENGINE="${PRBOT_ENGINE:-contextual}"
 LIMIT="${PRBOT_EVAL_LIMIT:-0}"
-CATEGORIZE_MODEL="${PRBOT_EVAL_CATEGORIZE_MODEL:-openai/gpt-5.6-luna}"
-JUDGE_MODEL="${PRBOT_EVAL_JUDGE_MODEL:-anthropic/claude-sonnet-4.6}"
+CATEGORIZE_MODEL="${PRBOT_EVAL_CATEGORIZE_MODEL:-deepseek/deepseek-v4-flash}"
+JUDGE_MODEL="${PRBOT_EVAL_JUDGE_MODEL:-deepseek/deepseek-v4-flash}"
+export PRBOT_REVIEW_MODEL="${PRBOT_REVIEW_MODEL:-deepseek/deepseek-v4-flash}"
+export PRBOT_VERIFICATION_MODEL="${PRBOT_VERIFICATION_MODEL:-deepseek/deepseek-v4-flash}"
 NOTES="${PRBOT_EVAL_NOTES:-}"
 
 if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
