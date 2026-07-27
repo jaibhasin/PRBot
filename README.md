@@ -1,55 +1,17 @@
 # PRBot
 
-PRBot is a precision-first pull request reviewer that runs entirely as a GitHub Action.
-It uses OpenRouter models, an ephemeral local Git object store, syntax-aware related-file discovery, bounded read-only repository tools, and independent finding verification.
+PRBot is a precision-first GitHub Action that reviews pull requests with OpenRouter models.
+It is built to find real, actionable problems instead of producing noisy AI feedback.
+
+PRBot combines a primary code reviewer with independent finding verification, then publishes only verified feedback.
 
 Status: experimental.
 
-## How reviews work
-
-PRBot gives one primary reviewer the complete selected change set and lets it investigate with bounded repository tools.
-
-1. It authorizes the triggering GitHub user before making any LLM call.
-2. It fetches the exact pull request base and head into an ephemeral bare Git repository.
-3. It computes the authoritative local diff, including deletions, renames, and multiline changes.
-4. It builds a relationship map from imports, symbols, references, matching tests, manifests, and directory structure.
-5. It assigns every eligible changed hunk to a semantic review bundle.
-6. It sends every selected bundle to one primary reviewer with bounded read-only tools.
-7. It independently verifies every candidate finding.
-8. It resolves exact diff anchors, removes duplicates, creates one GitHub review, updates one persistent summary, and publishes a check against the pull request head.
-
-Syntax-aware symbol extraction supports Rust, TypeScript, JavaScript, Python, and Go.
-Other supported source and configuration files use import heuristics and bounded code search.
-
-PRBot never runs project code, tests, package managers, shell commands selected by a model, or network requests selected by a model.
-Repository files, pull request text, and comments are always treated as untrusted data.
-
-## Owner-only cost control
-
-Only users with GitHub repository `admin` permission can spend model tokens.
-
-- Pull requests authored by a repository owner are reviewed automatically.
-- Pull requests from everyone else wait for an owner to comment `/prbot review`.
-- Only owners can use interactive `/prbot` commands.
-- Unauthorized events are rejected before PRBot checks for an OpenRouter key or calls a model.
-
-This is a GitHub Action, not a GitHub App.
-The `/prbot` syntax is a text command and replies are authored by `github-actions[bot]`.
-
-Supported commands:
-
-```text
-/prbot review
-/prbot ask Why does this change need the compatibility fallback?
-/prbot explain <finding URL or description>
-```
-
-Ordinary pull request comments do not trigger PRBot.
-
 ## Install
 
-Copy [`examples/prbot.yml`](examples/prbot.yml) to `.github/workflows/prbot.yml.
-Add `OPENROUTER_API_KEY` as a repository Actions secret.
+1. Add `OPENROUTER_API_KEY` as a repository Actions secret.
+2. Create `.github/workflows/prbot.yml` with the following workflow.
+3. Open or update a pull request.
 
 ```yaml
 name: PRBot
@@ -78,118 +40,35 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-No `actions/checkout` step is required.
-PRBot fetches exact Git revisions internally and never executes their contents.
+You can also copy [`examples/prbot.yml`](examples/prbot.yml).
+No checkout step is needed.
 
-Normal fork pull request events cannot access repository secrets.
-They exit before an LLM call, and an owner can review the fork safely by posting `/prbot review`.
-The `issue_comment` workflow runs from the trusted default branch and fetches the fork PR head only as read-only Git data.
-PRBot does not require `pull_request_target`.
+## How it works
 
-## Configuration
+- PRBot automatically reviews pull requests authored by users with GitHub `admin` permission.
+- Users with GitHub `admin` permission can request a review on any pull request by commenting `/prbot review`.
+- It fetches the exact pull request revisions and analyzes them as read-only Git data.
+- It maps related code and tests, reviews the relevant changes, and independently verifies each potential finding.
+- It posts one GitHub review with verified comments and a `PRBot review` check.
 
-Action inputs are hard ceilings:
+PRBot never runs pull request code, tests, package managers, or model-selected shell commands.
 
-| Input | Default | Purpose |
-| --- | ---: | --- |
-| `review_model` | `deepseek/deepseek-v4-flash` | Primary review model |
-| `verification_model` | `deepseek/deepseek-v4-flash` | Independent verification model |
-| `max_review_minutes` | `15` | Wall-clock deadline |
-| `max_input_tokens` | `500000` | Total estimated input-token ceiling |
-| `max_cost_usd` | `3.00` | Estimated model-cost ceiling |
-| `max_concurrency` | `8` | Concurrent model calls |
-| `max_comments` | `12` | Maximum published inline findings |
-| `engine` | `contextual` | Default primary-review engine; set `legacy` to roll back |
-| `dry_run` | `false` | Build and print the manifest without LLM or GitHub writes |
+## Optional configuration
 
-PRBot currently uses `deepseek/deepseek-v4-flash` for both review and independent verification.
-Model defaults should be re-pinned after the evaluation suite in [`evals/README.md`](evals/README.md) passes.
-Keep `engine: legacy` available as a temporary rollback while you measure quality on real PRs.
-A 50-case fixture catalog skeleton lives in [`evals/fixtures/`](evals/fixtures/); cases remain pending adjudication until labeled.
-
-Repositories can add a trusted `.prbot.toml` file:
+Use Action inputs to choose models and set hard limits for time, cost, tokens, concurrency, and comment count.
+Add a trusted `.prbot.toml` file to narrow review paths or provide repository-specific instructions.
 
 ```toml
 [review]
-auto_review = "owner-authored"
-include = ["**/*"]
-exclude = ["**/vendor/**", "**/generated/**", "**/*.lock"]
+exclude = ["**/generated/**", "**/*.lock"]
 instructions = ["Prioritize user-visible correctness regressions."]
 max_comments = 8
-
-[[path_rules]]
-glob = "src/auth/**"
-instructions = ["Prioritize authorization boundary regressions."]
 ```
 
-Repository configuration is loaded from the base revision, never from the pull request head.
-It can reduce action-level ceilings but cannot increase them.
-Hierarchical `AGENTS.md` files from the base revision are also applied to matching paths.
-
-## Review output
-
-PRBot publishes at most one formal review per run.
-The review contains one Precision review section that reports whether the primary reviewer completed, skipped, or failed.
-It supports right-side additions, left-side deletions, context lines, multiline anchors, and file-level fallback when an anchor is ambiguous.
-The model supplies exact anchor text, while deterministic code resolves and validates the GitHub line range.
-
-The primary reviewer can report concrete documentation drift in README files, `docs/**/*.md`, and user-facing examples.
-It never receives `AGENTS.md` patch content or direct access to those files.
-
-PRBot publishes a `PRBot review` check against the exact pull request head.
-The check succeeds only when coverage is complete and no verified findings remain.
-It fails for required findings, agent failures, exhausted budgets, or incomplete coverage.
-Repositories can require this check in branch protection.
-
-On later pushes, PRBot reviews only bundles affected since the previous reviewed head while retaining full-PR context.
-Stable fingerprints prevent unchanged findings from being reposted.
-Fingerprints for changed paths are cleared so those areas can be revalidated.
-
-A single hidden-state summary comment is updated on every run.
-It reports:
-
-- Reviewed head SHA.
-- Eligible and assigned hunk coverage.
-- Whether the run was incremental and how many bundles were reviewed.
-- Published and rejected findings.
-- Active unresolved findings.
-- Routing decisions and status for every review agent.
-- Failed or truncated stages.
-- Reviewer and verifier model IDs.
-- Input tokens, output tokens, estimated cost, and elapsed time.
-
-PRBot says “No verified findings” only after complete eligible coverage.
-Partial and failed runs are always reported as such.
-
-## Development
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-docker build -t prbot .
-```
-
-To run the Qodo benchmark harness:
-
-```bash
-./evals/qodo/scripts/run_batch.sh
-```
-
-See [`evals/qodo/README.md`](evals/qodo/README.md).
-
-Important source boundaries:
+Supported owner commands:
 
 ```text
-src/review/       Event authorization and orchestration
-src/repository/   Git snapshots, diffs, context graph, and read-only tools
-src/agents/       Primary review, verification, and prompts
-src/reporting/    Anchor resolution, fingerprints, and summary state
-src/github/       Paginated GitHub API client and batched publishing
-src/llm.rs        OpenRouter tool loop, concurrency, and budget ledger
+/prbot review
+/prbot ask <question>
+/prbot explain <finding URL or description>
 ```
-
-## Design references
-
-The architecture uses independently implemented patterns inspired by [PR-Agent context management](https://docs.pr-agent.ai/core-abilities/dynamic_context/), [Aider repository maps](https://aider.chat/docs/repomap.html), [OpenCode tools](https://opencode.ai/docs/tools), [Serge](https://huggingface.github.io/serge/), [Alibaba OpenCodeReview](https://github.com/alibaba/open-code-review), [Mira](https://docs.miracode.ai/), and the [Codex GitHub Action](https://github.com/openai/codex-action).
-No source code was copied from those projects.
