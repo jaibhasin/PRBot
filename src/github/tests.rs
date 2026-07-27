@@ -164,6 +164,27 @@ async fn retries_transient_write_failures() {
 }
 
 #[tokio::test]
+async fn adds_an_eyes_reaction_to_a_pull_request_comment() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let (sender, receiver) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        sender.send(read_request(&mut stream)).expect("send");
+        stream
+            .write_all(response("{}", None).as_bytes())
+            .expect("write");
+    });
+    let client = GitHubClient::with_base_url("token", "octocat/hello", format!("http://{address}"))
+        .expect("client");
+    client.create_reaction(42, "eyes").await.expect("reaction");
+    let request = receiver.recv().expect("request");
+    assert!(request.starts_with("POST /repos/octocat/hello/issues/comments/42/reactions "));
+    assert!(request.contains(r#"{"content":"eyes"}"#));
+    server.join().expect("server");
+}
+
+#[tokio::test]
 async fn treats_non_collaborator_not_found_as_unauthorized() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
     let address = listener.local_addr().expect("address");

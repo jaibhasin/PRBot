@@ -8,8 +8,9 @@ mod review_context;
 mod tests;
 
 use crate::config::{ReviewConfig, ReviewEngine};
-use crate::github::GitHubClient;
+use crate::github::{GitHubClient, IssueComment};
 use crate::llm::Budget;
+use crate::reporting::{parse_summary_state, SUMMARY_MARKER};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use event::Command;
@@ -71,6 +72,7 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
     let repository = required(args.repository.as_deref(), "GITHUB_REPOSITORY")?.to_owned();
     let token = required(args.github_token.as_deref(), "GITHUB_TOKEN")?.to_owned();
     let eval_json = args.eval_json || env_flag("PRBOT_EVAL_JSON");
+    let dry_run = args.dry_run || env_flag("PRBOT_DRY_RUN");
     let event = event::read_event_payload()?;
     let pr_number = event::resolve_pr_number(args.pr_number.as_deref(), event.as_ref())?;
     let github = if let Some(base_url) = &args.github_api_url {
@@ -114,7 +116,6 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
     }
 
     let mut config = config_from_args(&args)?;
-    let dry_run = args.dry_run || env_flag("PRBOT_DRY_RUN");
     if eval_json && dry_run {
         bail!("--eval-json and --dry-run cannot be combined");
     }
@@ -131,13 +132,28 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
 
     let comments = github.list_issue_comments(pr_number).await?;
     if let Some(comment_id) = comment_id {
-        if comments.iter().any(|item| {
-            item.body
-                .contains(&format!("<!-- prbot-command:{comment_id} -->"))
-        }) {
+        if is_duplicate_command(&comments, comment_id) {
             println!("PRBot skipped duplicate command event #{comment_id}");
             return Ok(());
         }
+    }
+
+    // A command from an authorized owner has been accepted. Select and add an
+    // acknowledgement before preparing repository context or starting command work.
+    if let (Some(comment_id), Some(api_key), Some(budget)) = (
+        comment_id.filter(|_| !dry_run && !eval_json),
+        args.openrouter_api_key.as_deref(),
+        budget.as_ref(),
+    ) {
+        commands::acknowledge_command(
+            &github,
+            comment_id,
+            &command,
+            api_key,
+            &config,
+            Arc::clone(budget),
+        )
+        .await;
     }
 
     let prepare = review_context::prepare_snapshot(
@@ -282,6 +298,21 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
             .await
         }
     }
+}
+
+/// Determines whether an already-published PRBot response or review summary
+/// records that a command comment has been handled.
+fn is_duplicate_command(comments: &[IssueComment], comment_id: u64) -> bool {
+    let marker = format!("<!-- prbot-command:{comment_id} -->");
+    comments
+        .iter()
+        .any(|comment| comment.body.contains(&marker))
+        || comments
+            .iter()
+            .rev()
+            .filter(|comment| comment.body.contains(SUMMARY_MARKER))
+            .filter_map(|comment| parse_summary_state(&comment.body))
+            .any(|state| state.handled_comment_ids.contains(&comment_id))
 }
 
 /// Builds the review configuration from command-line arguments and validates its model settings.

@@ -1,4 +1,6 @@
-use super::{config_from_args, run, ReviewArgs};
+use super::{config_from_args, is_duplicate_command, run, ReviewArgs};
+use crate::github::{GitHubUser, IssueComment};
+use crate::reporting::SUMMARY_MARKER;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
@@ -26,6 +28,35 @@ fn same_model_is_allowed_for_review_and_verification() {
     args.verification_model = Some("deepseek/deepseek-v4-flash".to_owned());
     let config = config_from_args(&args).expect("same model allowed");
     assert_eq!(config.review_model, config.verification_model);
+}
+
+#[test]
+fn duplicate_commands_are_detected_before_acknowledgement() {
+    let command_id = 42;
+    let marker_comment = comment(format!("<!-- prbot-command:{command_id} -->\nDone"));
+    assert!(is_duplicate_command(&[marker_comment], command_id));
+
+    let state = serde_json::json!({
+        "version": 0,
+        "reviewed_sha": "",
+        "fingerprints": [],
+        "fingerprint_paths": {},
+        "handled_comment_ids": [command_id],
+    });
+    let summary_comment = comment(format!("{SUMMARY_MARKER}\n<!-- prbot-state:{state} -->"));
+    assert!(is_duplicate_command(&[summary_comment], command_id));
+    assert!(!is_duplicate_command(&[], command_id));
+}
+
+fn comment(body: String) -> IssueComment {
+    IssueComment {
+        id: 1,
+        body,
+        user: GitHubUser {
+            login: "prbot".to_owned(),
+            user_type: "Bot".to_owned(),
+        },
+    }
 }
 
 /// Builds review arguments for a repository pull request using the specified GitHub API endpoint.

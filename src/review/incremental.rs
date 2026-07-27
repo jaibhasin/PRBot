@@ -26,7 +26,7 @@ use std::path::Path;
 ///
 /// let selected = select_bundles_for_paths(&manifest, &changed_paths);
 /// assert!(selected.is_empty());
-/// ```♀♀♀♀♀♀
+/// ```
 pub fn select_bundles_for_paths(
     manifest: &ReviewManifest,
     changed_paths: &BTreeSet<String>,

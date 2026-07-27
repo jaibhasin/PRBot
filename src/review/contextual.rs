@@ -304,9 +304,6 @@ pub async fn run_review(
     github
         .create_review_check(&pull_request.head.sha, conclusion, &title, &summary)
         .await?;
-    if let Some(command_id) = command_id {
-        let _ = github.create_reaction(command_id, "eyes").await;
-    }
     println!(
         "PRBot completed review: findings={} file_level={} coverage={}/{}",
         publish.len(),
