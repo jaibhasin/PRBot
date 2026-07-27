@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Run PRBot
-        uses: jaibhasin/PRBot@v1.0.0
+        uses: jaibhasin/PRBot@v1.0.1
         with:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -42,6 +42,9 @@ jobs:
 
 You can also copy [`examples/prbot.yml`](examples/prbot.yml).
 No checkout step is needed.
+
+On each version tag, the Action image is published to `ghcr.io/jaibhasin/prbot`.
+After the first publish, set that package visibility to **Public** in the repo Packages settings if GitHub created it as private.
 
 ## How it works
 

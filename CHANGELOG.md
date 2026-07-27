@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-28
+
+### Changed
+- Action runtime image is prebuilt and published to `ghcr.io/jaibhasin/prbot` on version tags
+- Consumer workflows pull the GHCR image instead of building the Dockerfile on each run
+
 ## [1.0.0] - 2026-07-28
 
 ### Added

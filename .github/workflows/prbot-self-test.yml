@@ -1,4 +1,6 @@
 # Dogfood this Action against PRs in the PRBot repo itself.
+# Builds the local Dockerfile so PRs still validate image changes after
+# action.yml points consumers at the prebuilt GHCR image.
 name: PRBot self-test
 
 on:
@@ -20,12 +22,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Build Action container
+        run: docker build -t prbot-self-test .
+
       - name: Run PRBot (dry run)
-        uses: ./
-        with:
-          openrouter_api_key: "unused-in-dry-run"
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          dry_run: "true"
+        env:
+          INPUT_OPENROUTER_API_KEY: unused-in-dry-run
+          INPUT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_DRY_RUN: "true"
+          INPUT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_API_URL: ${{ github.api_url }}
+        run: |
+          docker run --rm \
+            -e INPUT_OPENROUTER_API_KEY \
+            -e INPUT_GITHUB_TOKEN \
+            -e INPUT_DRY_RUN \
+            -e INPUT_PR_NUMBER \
+            -e GITHUB_TOKEN \
+            -e GITHUB_REPOSITORY \
+            -e GITHUB_API_URL \
+            prbot-self-test review
 
   container-smoke:
     if: ${{ github.event_name == 'workflow_dispatch' }}
