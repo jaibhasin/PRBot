@@ -71,6 +71,7 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
     let repository = required(args.repository.as_deref(), "GITHUB_REPOSITORY")?.to_owned();
     let token = required(args.github_token.as_deref(), "GITHUB_TOKEN")?.to_owned();
     let eval_json = args.eval_json || env_flag("PRBOT_EVAL_JSON");
+    let dry_run = args.dry_run || env_flag("PRBOT_DRY_RUN");
     let event = event::read_event_payload()?;
     let pr_number = event::resolve_pr_number(args.pr_number.as_deref(), event.as_ref())?;
     let github = if let Some(base_url) = &args.github_api_url {
@@ -114,7 +115,6 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
     }
 
     let mut config = config_from_args(&args)?;
-    let dry_run = args.dry_run || env_flag("PRBOT_DRY_RUN");
     if eval_json && dry_run {
         bail!("--eval-json and --dry-run cannot be combined");
     }
@@ -128,6 +128,14 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
             config.max_cost_usd,
         ))
     });
+
+    // A command from an authorized owner has been accepted. Acknowledge it before
+    // preparing repository context or making any model calls so the author gets
+    // immediate feedback. The reaction is intentionally best-effort: failure to
+    // add it must not prevent PRBot from carrying out the requested command.
+    if let Some(comment_id) = comment_id.filter(|_| !dry_run && !eval_json) {
+        let _ = github.create_reaction(comment_id, "eyes").await;
+    }
 
     let comments = github.list_issue_comments(pr_number).await?;
     if let Some(comment_id) = comment_id {

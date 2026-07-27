@@ -113,7 +113,6 @@ Use repository tools when the answer depends on code. Reply with concise GitHub 
             &format!("<!-- prbot-command:{command_id} -->\n{}", reply.trim()),
         )
         .await?;
-    let _ = github.create_reaction(command_id, "eyes").await;
     Ok(())
 }
 
