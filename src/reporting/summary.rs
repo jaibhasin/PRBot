@@ -268,6 +268,8 @@ mod tests {
             budget: crate::types::BudgetSnapshot::default(),
             incremental: Some(false),
             reviewed_bundles: Some(1),
+            agent_runs: Vec::new(),
+            router_fallback: false,
         };
         let summary = render_summary(
             "octocat/hello",
@@ -287,6 +289,7 @@ mod tests {
         let mut state = SummaryState::default();
         state.remember_finding(&ResolvedFinding {
             candidate: CandidateFinding {
+                agent: crate::types::ReviewAgent::Correctness,
                 path: "src/a.rs".to_owned(),
                 side: DiffSide::Right,
                 anchor: "a".to_owned(),

@@ -161,6 +161,8 @@ pub async fn run_review(
         agents::AgentReviewResult {
             findings: Vec::new(),
             failed_bundles: Vec::new(),
+            agent_runs: Vec::new(),
+            router_fallback: false,
         }
     } else {
         match config.engine {
@@ -239,6 +241,8 @@ pub async fn run_review(
         budget: budget.snapshot().await,
         incremental: Some(incremental),
         reviewed_bundles: Some(selected_bundles.len()),
+        agent_runs: result.agent_runs,
+        router_fallback: result.router_fallback,
     };
     if eval_mode {
         println!(
@@ -348,6 +352,7 @@ mod tests {
     fn file_level_comments_use_subject_type() {
         let finding = ResolvedFinding {
             candidate: CandidateFinding {
+                agent: crate::types::ReviewAgent::Correctness,
                 path: "src/main.rs".to_owned(),
                 side: DiffSide::Right,
                 anchor: "ambiguous".to_owned(),
