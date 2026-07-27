@@ -9,7 +9,8 @@ branding:
 inputs:
   openrouter_api_key:
     description: "OpenRouter API key used for LLM review calls."
-    required: true
+    required: false
+    default: ""
   github_token:
     description: "GitHub token with permission to read the PR and post comments. If omitted, the workflow job token (GITHUB_TOKEN) is used."
     required: false
@@ -19,9 +20,41 @@ inputs:
     required: false
     default: ""
   dry_run:
-    description: "If true, do not call the LLM or post comments."
+    description: "Build and print the contextual review manifest without calling the LLM or posting comments."
     required: false
     default: "false"
+  review_model:
+    description: "OpenRouter model used by review and audit agents."
+    required: false
+    default: "deepseek/deepseek-v4-pro"
+  verification_model:
+    description: "Independent OpenRouter model used to verify candidate findings."
+    required: false
+    default: "openai/gpt-5.6-luna"
+  max_review_minutes:
+    description: "Hard wall-clock review deadline."
+    required: false
+    default: "15"
+  max_input_tokens:
+    description: "Maximum estimated input tokens across all model calls."
+    required: false
+    default: "500000"
+  max_cost_usd:
+    description: "Maximum estimated model cost in US dollars."
+    required: false
+    default: "3.00"
+  max_concurrency:
+    description: "Maximum number of concurrent review bundles."
+    required: false
+    default: "8"
+  max_comments:
+    description: "Maximum number of verified inline findings published per run."
+    required: false
+    default: "12"
+  engine:
+    description: "Review engine: contextual or legacy."
+    required: false
+    default: "legacy"
 
 runs:
   using: "docker"

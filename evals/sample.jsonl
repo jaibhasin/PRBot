@@ -1,0 +1,1 @@
+{"case_id":"sample-rust","language":"rust","eligible_hunks":1,"assigned_hunks":1,"reported_clean":false,"unauthorized_model_calls":0,"expected_findings":[{"id":"sample-bug","priority":"P1"}],"published_findings":[{"expected_id":"sample-bug","actionable":true,"anchor_valid":true,"fingerprint":"sample-fingerprint"}]}
