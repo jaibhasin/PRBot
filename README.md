@@ -1,23 +1,22 @@
 # PRBot
 
-PRBot is a precision-first, multi-agent pull request reviewer that runs entirely as a GitHub Action.
+PRBot is a precision-first pull request reviewer that runs entirely as a GitHub Action.
 It uses OpenRouter models, an ephemeral local Git object store, syntax-aware related-file discovery, bounded read-only repository tools, and independent finding verification.
 
 Status: experimental.
 
 ## How reviews work
 
-PRBot does more than send GitHub patch fragments to one model.
+PRBot gives one primary reviewer the complete selected change set and lets it investigate with bounded repository tools.
 
 1. It authorizes the triggering GitHub user before making any LLM call.
 2. It fetches the exact pull request base and head into an ephemeral bare Git repository.
 3. It computes the authoritative local diff, including deletions, renames, and multiline changes.
 4. It builds a relationship map from imports, symbols, references, matching tests, manifests, and directory structure.
 5. It assigns every eligible changed hunk to a semantic review bundle.
-6. It asks a routing agent to select architecture, security, performance, and documentation specialists for relevant bundles.
-7. It always runs correctness reviewers, then runs the selected specialists concurrently with bounded read-only tools.
-8. It independently verifies every candidate finding.
-9. It resolves exact diff anchors, removes duplicates, creates one sectioned GitHub review, updates one persistent summary, and publishes a check against the pull request head.
+6. It sends every selected bundle to one primary reviewer with bounded read-only tools.
+7. It independently verifies every candidate finding.
+8. It resolves exact diff anchors, removes duplicates, creates one GitHub review, updates one persistent summary, and publishes a check against the pull request head.
 
 Syntax-aware symbol extraction supports Rust, TypeScript, JavaScript, Python, and Go.
 Other supported source and configuration files use import heuristics and bounded code search.
@@ -93,14 +92,14 @@ Action inputs are hard ceilings:
 
 | Input | Default | Purpose |
 | --- | ---: | --- |
-| `review_model` | `deepseek/deepseek-v4-flash` | Routing and specialist model |
+| `review_model` | `deepseek/deepseek-v4-flash` | Primary review model |
 | `verification_model` | `deepseek/deepseek-v4-flash` | Independent verification model |
 | `max_review_minutes` | `15` | Wall-clock deadline |
 | `max_input_tokens` | `500000` | Total estimated input-token ceiling |
 | `max_cost_usd` | `3.00` | Estimated model-cost ceiling |
 | `max_concurrency` | `8` | Concurrent model calls |
 | `max_comments` | `12` | Maximum published inline findings |
-| `engine` | `contextual` | Default multi-agent engine; set `legacy` to roll back |
+| `engine` | `contextual` | Default primary-review engine; set `legacy` to roll back |
 | `dry_run` | `false` | Build and print the manifest without LLM or GitHub writes |
 
 PRBot currently uses `deepseek/deepseek-v4-flash` for both review and independent verification.
@@ -130,13 +129,12 @@ Hierarchical `AGENTS.md` files from the base revision are also applied to matchi
 ## Review output
 
 PRBot publishes at most one formal review per run.
-The review contains separate correctness, architecture, security, performance, and documentation sections.
-Each section reports whether its agent was completed, skipped by the router, or failed.
+The review contains one Precision review section that reports whether the primary reviewer completed, skipped, or failed.
 It supports right-side additions, left-side deletions, context lines, multiline anchors, and file-level fallback when an anchor is ambiguous.
 The model supplies exact anchor text, while deterministic code resolves and validates the GitHub line range.
 
-The Documentation Steward reports concrete drift in README files, `docs/**/*.md`, and user-facing examples.
-It names the required correction but never writes repository files and never requests changes to `AGENTS.md`.
+The primary reviewer can report concrete documentation drift in README files, `docs/**/*.md`, and user-facing examples.
+It never receives `AGENTS.md` patch content or direct access to those files.
 
 PRBot publishes a `PRBot review` check against the exact pull request head.
 The check succeeds only when coverage is complete and no verified findings remain.
@@ -185,7 +183,7 @@ Important source boundaries:
 ```text
 src/review/       Event authorization and orchestration
 src/repository/   Git snapshots, diffs, context graph, and read-only tools
-src/agents/       Routing, parallel specialist reviewers, and verification
+src/agents/       Primary review, verification, and prompts
 src/reporting/    Anchor resolution, fingerprints, and summary state
 src/github/       Paginated GitHub API client and batched publishing
 src/llm.rs        OpenRouter tool loop, concurrency, and budget ledger

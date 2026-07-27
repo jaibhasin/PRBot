@@ -61,7 +61,7 @@ pub async fn review(
         Ok(response) => {
             let mut findings = response.findings;
             for finding in &mut findings {
-                finding.agent = ReviewAgent::Correctness;
+                finding.agent = ReviewAgent::Primary;
             }
             let finding_count = findings.len();
             AgentReviewResult {
@@ -72,7 +72,6 @@ pub async fn review(
                     finding_count,
                     finding_count,
                 )],
-                router_fallback: false,
             }
         }
         Err(error) => {
@@ -81,7 +80,6 @@ pub async fn review(
                 findings: Vec::new(),
                 failed_bundles: vec!["legacy-review".to_owned()],
                 agent_runs: vec![legacy_run(AgentStatus::Failed, 0, 0)],
-                router_fallback: false,
             }
         }
     }
@@ -93,7 +91,7 @@ fn legacy_run(
     accepted_findings: usize,
 ) -> AgentRun {
     AgentRun {
-        agent: ReviewAgent::Correctness,
+        agent: ReviewAgent::Primary,
         status,
         bundle_ids: vec!["legacy-review".to_owned()],
         rationale: "Legacy rollback reviewer.".to_owned(),

@@ -1,6 +1,5 @@
 use crate::repository::syntax::looks_like_definition;
 use crate::repository::GitRepository;
-use crate::types::ReviewAgent;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -37,15 +36,12 @@ pub async fn execute_bounded(
     .context("repository tool task failed")?
 }
 
-pub async fn execute_bounded_for_agent(
+pub async fn execute_bounded_for_reviewer(
     tools: Arc<RepositoryTools>,
-    agent: ReviewAgent,
     name: String,
     arguments: String,
 ) -> Result<String> {
-    if agent == ReviewAgent::Documentation {
-        validate_documentation_tool_call(&name, &arguments)?;
-    }
+    validate_reviewer_tool_call(&name, &arguments)?;
     execute_bounded(tools, name, arguments).await
 }
 
@@ -53,15 +49,12 @@ pub fn is_agent_instructions(path: &str) -> bool {
     path == "AGENTS.md" || path.ends_with("/AGENTS.md")
 }
 
-fn validate_documentation_tool_call(name: &str, arguments: &str) -> Result<()> {
-    if name == "get_pr_context" {
-        bail!("Documentation Steward cannot read AGENTS.md-derived PR instructions");
-    }
+fn validate_reviewer_tool_call(name: &str, arguments: &str) -> Result<()> {
     if matches!(name, "read_file" | "read_diff") {
         let value: Value =
             serde_json::from_str(arguments).context("invalid repository tool arguments")?;
         if contains_agent_instructions_path(&value) {
-            bail!("Documentation Steward cannot read AGENTS.md");
+            bail!("primary reviewer cannot read AGENTS.md directly");
         }
     }
     Ok(())

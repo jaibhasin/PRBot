@@ -208,49 +208,18 @@ pub enum FindingCategory {
 #[serde(rename_all = "snake_case")]
 pub enum ReviewAgent {
     #[default]
-    Correctness,
-    Architecture,
-    Security,
-    Performance,
-    Documentation,
+    Primary,
 }
 
 impl ReviewAgent {
-    pub const SPECIALISTS: [Self; 4] = [
-        Self::Architecture,
-        Self::Security,
-        Self::Performance,
-        Self::Documentation,
-    ];
-
-    pub const REVIEWERS: [Self; 5] = [
-        Self::Correctness,
-        Self::Architecture,
-        Self::Security,
-        Self::Performance,
-        Self::Documentation,
-    ];
-
     pub fn title(self) -> &'static str {
-        match self {
-            Self::Correctness => "Correctness and reliability",
-            Self::Architecture => "Architecture",
-            Self::Security => "Security",
-            Self::Performance => "Performance",
-            Self::Documentation => "Documentation",
-        }
+        "Precision review"
     }
 }
 
 impl fmt::Display for ReviewAgent {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Correctness => "correctness",
-            Self::Architecture => "architecture",
-            Self::Security => "security",
-            Self::Performance => "performance",
-            Self::Documentation => "documentation",
-        })
+        formatter.write_str("primary")
     }
 }
 
@@ -349,6 +318,4 @@ pub struct RunOutcome {
     pub reviewed_bundles: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_runs: Vec<AgentRun>,
-    #[serde(default)]
-    pub router_fallback: bool,
 }

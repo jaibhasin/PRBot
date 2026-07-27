@@ -9,7 +9,7 @@ pub use context::{build_context, render_repo_map};
 pub use diff::build_manifest;
 pub use git::GitRepository;
 pub use tools::{
-    execute_bounded, execute_bounded_for_agent, is_agent_instructions, tool_definitions,
+    execute_bounded, execute_bounded_for_reviewer, is_agent_instructions, tool_definitions,
     RepositoryTools,
 };
 

@@ -1,8 +1,7 @@
 use super::{
-    build_context, build_manifest, execute_bounded_for_agent, GitRepository, RepositoryTools,
+    build_context, build_manifest, execute_bounded_for_reviewer, GitRepository, RepositoryTools,
 };
 use crate::config::ReviewConfig;
-use crate::types::ReviewAgent;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -148,7 +147,7 @@ fn tools_are_revision_scoped_bounded_and_reject_traversal() {
 }
 
 #[tokio::test]
-async fn documentation_tools_cannot_read_agent_instructions() {
+async fn primary_reviewer_tools_cannot_read_agent_instructions() {
     let fixture = Fixture::new();
     let tools = Arc::new(RepositoryTools::new(
         fixture.repository(),
@@ -161,19 +160,17 @@ async fn documentation_tools_cannot_read_agent_instructions() {
         )
         .expect("search");
     assert!(search.is_empty());
-    assert!(execute_bounded_for_agent(
+    assert!(execute_bounded_for_reviewer(
         Arc::clone(&tools),
-        ReviewAgent::Documentation,
         "read_file".to_owned(),
         r#"{"path":"AGENTS.md","revision":"head"}"#.to_owned(),
     )
     .await
     .is_err());
-    assert!(execute_bounded_for_agent(
+    assert!(execute_bounded_for_reviewer(
         tools,
-        ReviewAgent::Documentation,
-        "get_pr_context".to_owned(),
-        "{}".to_owned(),
+        "read_diff".to_owned(),
+        r#"{"paths":["AGENTS.md"]}"#.to_owned(),
     )
     .await
     .is_err());

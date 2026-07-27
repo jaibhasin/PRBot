@@ -203,7 +203,6 @@ pub async fn run_review(
         findings,
         mut failed_bundles,
         agent_runs,
-        router_fallback,
     } = result;
     let (resolved, unanchored) = resolve_findings(findings, &manifest.files);
     let file_level_count = resolved.iter().filter(|finding| finding.file_level).count();
@@ -261,7 +260,6 @@ pub async fn run_review(
         incremental: Some(incremental),
         reviewed_bundles: Some(selected_bundles.len()),
         agent_runs,
-        router_fallback,
     };
     if eval_mode {
         println!(
@@ -278,7 +276,7 @@ pub async fn run_review(
             findings: publish,
         }));
     }
-    let review_body = render_review_body(&outcome.agent_runs, outcome.router_fallback);
+    let review_body = render_review_body(&outcome.agent_runs);
     if !publish.is_empty() {
         let input = publish.iter().map(review_comment).collect::<Vec<_>>();
         let id = github

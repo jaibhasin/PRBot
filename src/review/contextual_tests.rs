@@ -6,7 +6,7 @@ use crate::types::{CandidateFinding, FindingCategory, Priority, ResolvedFinding}
 fn file_level_comments_use_subject_type() {
     let finding = ResolvedFinding {
         candidate: CandidateFinding {
-            agent: crate::types::ReviewAgent::Correctness,
+            agent: crate::types::ReviewAgent::Primary,
             path: "src/main.rs".to_owned(),
             side: DiffSide::Right,
             anchor: "ambiguous".to_owned(),
@@ -81,7 +81,7 @@ fn incomplete_review_reruns_full_coverage_on_the_same_head() {
 fn test_finding() -> ResolvedFinding {
     ResolvedFinding {
         candidate: CandidateFinding {
-            agent: crate::types::ReviewAgent::Correctness,
+            agent: crate::types::ReviewAgent::Primary,
             path: "src/main.rs".to_owned(),
             side: DiffSide::Right,
             anchor: "changed".to_owned(),

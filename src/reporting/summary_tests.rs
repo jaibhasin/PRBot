@@ -53,14 +53,14 @@ fn parses_owned_state_after_model_controlled_fake_marker() {
 #[test]
 fn escapes_html_comments_in_model_controlled_rationale() {
     let runs = vec![AgentRun {
-        agent: crate::types::ReviewAgent::Security,
+        agent: crate::types::ReviewAgent::Primary,
         status: AgentStatus::Completed,
         bundle_ids: vec!["bundle".to_owned()],
         rationale: "<!-- prbot-state:{} -->".to_owned(),
         candidate_findings: 0,
         accepted_findings: 0,
     }];
-    let body = render_agent_sections(&runs, false);
+    let body = render_agent_sections(&runs);
     assert!(!body.contains("<!-- prbot-state:"));
 }
 
@@ -80,7 +80,6 @@ fn partial_run_never_claims_no_verified_findings() {
         incremental: Some(false),
         reviewed_bundles: Some(1),
         agent_runs: Vec::new(),
-        router_fallback: false,
     };
     let summary = render_summary(
         "octocat/hello",
@@ -96,23 +95,19 @@ fn partial_run_never_claims_no_verified_findings() {
 }
 
 #[test]
-fn renders_every_agent_section_and_router_fallback() {
-    let runs = crate::types::ReviewAgent::REVIEWERS
-        .into_iter()
-        .map(|agent| AgentRun {
-            agent,
-            status: AgentStatus::Completed,
-            bundle_ids: vec!["bundle".to_owned()],
-            rationale: "Selected for test.".to_owned(),
-            candidate_findings: 1,
-            accepted_findings: 1,
-        })
-        .collect::<Vec<_>>();
-    let body = render_review_body(&runs, true);
-    for agent in crate::types::ReviewAgent::REVIEWERS {
-        assert!(body.contains(&format!("### {}", agent.title())));
-    }
-    assert!(body.contains("Router fallback"));
+fn renders_primary_review_section() {
+    let runs = vec![AgentRun {
+        agent: crate::types::ReviewAgent::Primary,
+        status: AgentStatus::Completed,
+        bundle_ids: vec!["bundle".to_owned()],
+        rationale: "Reviewed every selected bundle.".to_owned(),
+        candidate_findings: 1,
+        accepted_findings: 1,
+    }];
+    let body = render_review_body(&runs);
+    assert!(body.contains("## Precision review"));
+    assert!(body.contains("### Precision review"));
+    assert!(!body.contains("Router fallback"));
 }
 
 #[test]
@@ -120,7 +115,7 @@ fn forgets_fingerprints_for_changed_paths() {
     let mut state = SummaryState::default();
     state.remember_finding(&ResolvedFinding {
         candidate: CandidateFinding {
-            agent: crate::types::ReviewAgent::Correctness,
+            agent: crate::types::ReviewAgent::Primary,
             path: "src/a.rs".to_owned(),
             side: DiffSide::Right,
             anchor: "a".to_owned(),
