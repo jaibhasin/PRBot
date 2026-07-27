@@ -1,5 +1,6 @@
 use crate::repository::syntax::looks_like_definition;
 use crate::repository::GitRepository;
+use crate::types::ReviewAgent;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -34,6 +35,45 @@ pub async fn execute_bounded(
     .await
     .context("repository tool exceeded 10-second limit")?
     .context("repository tool task failed")?
+}
+
+pub async fn execute_bounded_for_agent(
+    tools: Arc<RepositoryTools>,
+    agent: ReviewAgent,
+    name: String,
+    arguments: String,
+) -> Result<String> {
+    if agent == ReviewAgent::Documentation {
+        validate_documentation_tool_call(&name, &arguments)?;
+    }
+    execute_bounded(tools, name, arguments).await
+}
+
+pub fn is_agent_instructions(path: &str) -> bool {
+    path == "AGENTS.md" || path.ends_with("/AGENTS.md")
+}
+
+fn validate_documentation_tool_call(name: &str, arguments: &str) -> Result<()> {
+    if name == "get_pr_context" {
+        bail!("Documentation Steward cannot read AGENTS.md-derived PR instructions");
+    }
+    if matches!(name, "read_file" | "read_diff") {
+        let value: Value =
+            serde_json::from_str(arguments).context("invalid repository tool arguments")?;
+        if contains_agent_instructions_path(&value) {
+            bail!("Documentation Steward cannot read AGENTS.md");
+        }
+    }
+    Ok(())
+}
+
+fn contains_agent_instructions_path(value: &Value) -> bool {
+    match value {
+        Value::String(path) => is_agent_instructions(path),
+        Value::Array(values) => values.iter().any(contains_agent_instructions_path),
+        Value::Object(values) => values.values().any(contains_agent_instructions_path),
+        _ => false,
+    }
 }
 
 pub struct RepositoryTools {
@@ -257,6 +297,11 @@ impl RepositoryTools {
             self.repository
                 .search(&args.revision, &args.query, args.max_results)?
         };
+        let raw = raw
+            .lines()
+            .filter(|line| !line.split(':').take(3).any(is_agent_instructions))
+            .collect::<Vec<_>>()
+            .join("\n");
         if !definitions_only {
             return Ok(raw);
         }

@@ -1,4 +1,4 @@
-use crate::types::{AgentRun, AgentStatus, ResolvedFinding, RunOutcome, RunStatus};
+use crate::types::{AgentRun, AgentStatus, Priority, ResolvedFinding, RunOutcome, RunStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,6 +15,8 @@ pub struct SummaryState {
     pub fingerprint_paths: BTreeMap<String, String>,
     #[serde(default)]
     pub fingerprint_related_paths: BTreeMap<String, BTreeSet<String>>,
+    #[serde(default)]
+    pub fingerprint_priorities: BTreeMap<String, Priority>,
     #[serde(default)]
     pub handled_comment_ids: BTreeSet<u64>,
 }
@@ -62,6 +64,7 @@ impl SummaryState {
             self.fingerprints.remove(&fingerprint);
             self.fingerprint_paths.remove(&fingerprint);
             self.fingerprint_related_paths.remove(&fingerprint);
+            self.fingerprint_priorities.remove(&fingerprint);
         }
     }
 
@@ -90,6 +93,20 @@ impl SummaryState {
                 .map(|span| span.path.clone())
                 .collect(),
         );
+        self.fingerprint_priorities
+            .insert(finding.fingerprint.clone(), finding.candidate.priority);
+    }
+
+    pub fn blocking_findings(&self) -> usize {
+        self.fingerprints
+            .iter()
+            .filter(|fingerprint| {
+                !matches!(
+                    self.fingerprint_priorities.get(*fingerprint),
+                    Some(Priority::P3)
+                )
+            })
+            .count()
     }
 }
 
@@ -309,6 +326,7 @@ mod tests {
             fingerprints: ["one".to_owned()].into_iter().collect(),
             fingerprint_paths: BTreeMap::from([("one".to_owned(), "src/main.rs".to_owned())]),
             fingerprint_related_paths: BTreeMap::new(),
+            fingerprint_priorities: BTreeMap::new(),
             handled_comment_ids: BTreeSet::new(),
         };
         let body = format!(
@@ -420,5 +438,20 @@ mod tests {
         );
         state.forget_paths(&BTreeSet::from(["README.md".to_owned()]));
         assert!(!state.fingerprints.contains("docs-fp"));
+    }
+
+    #[test]
+    fn only_p0_through_p2_findings_block_the_check() {
+        let mut state = SummaryState::default();
+        state
+            .fingerprints
+            .extend(["p2".to_owned(), "p3".to_owned()]);
+        state
+            .fingerprint_priorities
+            .insert("p2".to_owned(), Priority::P2);
+        state
+            .fingerprint_priorities
+            .insert("p3".to_owned(), Priority::P3);
+        assert_eq!(state.blocking_findings(), 1);
     }
 }

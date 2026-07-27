@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod integration_tests;
 mod prompts;
 mod router;
 mod tasks;
@@ -5,7 +7,9 @@ mod verifier;
 
 use crate::config::ReviewConfig;
 use crate::llm::LlmClient;
-use crate::repository::{execute_bounded, render_repo_map, tool_definitions, RepositoryTools};
+use crate::repository::{
+    execute_bounded_for_agent, render_repo_map, tool_definitions, RepositoryTools,
+};
 use crate::types::{
     AgentRun, AgentStatus, CandidateFinding, ReviewAgent, ReviewBundle, ReviewManifest,
 };
@@ -55,23 +59,27 @@ pub async fn review_bundles(
             let files = Arc::clone(&files);
             let config = Arc::clone(&config);
             async move {
+                let agent = task.agent;
                 let prompt =
-                    prompts::review_prompt(task.agent, &task.bundles, &files, &repo_map, &config);
+                    prompts::review_prompt(agent, &task.bundles, &files, &repo_map, &config);
                 let tool_runner = Arc::clone(&tools);
-                let response = client
-                    .run_agent(
-                        &config.review_model,
-                        prompts::reviewer_system(task.agent),
-                        &prompt,
-                        tool_definitions(),
-                        12,
-                        move |name, arguments| {
-                            let tools = Arc::clone(&tool_runner);
-                            async move { execute_bounded(tools, name, arguments).await }
-                        },
-                    )
-                    .await
-                    .and_then(|raw| parse_findings(&raw, task.agent));
+                let response =
+                    client
+                        .run_agent(
+                            &config.review_model,
+                            prompts::reviewer_system(agent),
+                            &prompt,
+                            tool_definitions(),
+                            12,
+                            move |name, arguments| {
+                                let tools = Arc::clone(&tool_runner);
+                                async move {
+                                    execute_bounded_for_agent(tools, agent, name, arguments).await
+                                }
+                            },
+                        )
+                        .await
+                        .and_then(|raw| parse_findings(&raw, agent));
                 (task, response)
             }
         })
@@ -124,7 +132,7 @@ pub async fn review_bundles(
     }
 }
 
-fn empty_result() -> AgentReviewResult {
+pub fn empty_result() -> AgentReviewResult {
     AgentReviewResult {
         findings: Vec::new(),
         failed_bundles: Vec::new(),

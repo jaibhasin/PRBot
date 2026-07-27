@@ -1,5 +1,6 @@
 use super::finding_schema;
 use crate::config::ReviewConfig;
+use crate::repository::is_agent_instructions;
 use crate::types::{ChangedFile, ReviewAgent, ReviewBundle};
 
 pub fn reviewer_system(agent: ReviewAgent) -> &'static str {
@@ -35,15 +36,22 @@ pub fn review_prompt(
         .collect::<Vec<_>>();
     let patches = files
         .iter()
-        .filter(|file| paths.contains(&&file.path))
+        .filter(|file| {
+            paths.contains(&&file.path)
+                && (agent != ReviewAgent::Documentation || !is_agent_instructions(&file.path))
+        })
         .map(|file| format!("### {}\n```diff\n{}\n```", file.path, file.patch))
         .collect::<Vec<_>>()
         .join("\n\n");
-    let instructions = paths
-        .iter()
-        .flat_map(|path| config.instructions_for(path))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let instructions = if agent == ReviewAgent::Documentation {
+        String::new()
+    } else {
+        paths
+            .iter()
+            .flat_map(|path| config.instructions_for(path))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let bundle_summary = bundles
         .iter()
         .map(|bundle| {
@@ -79,6 +87,7 @@ Bundle diff:\n{}",
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{FileStatus, RiskLevel};
 
     #[test]
     fn every_specialist_has_a_distinct_system_prompt() {
@@ -93,5 +102,30 @@ mod tests {
     fn documentation_steward_excludes_agents_md() {
         let prompt = reviewer_system(ReviewAgent::Documentation);
         assert!(prompt.contains("Never inspect, request, or update AGENTS.md"));
+    }
+
+    #[test]
+    fn documentation_steward_never_receives_agent_instruction_contents() {
+        let files = vec![ChangedFile {
+            path: "AGENTS.md".to_owned(),
+            old_path: None,
+            status: FileStatus::Modified,
+            patch: "+DO_NOT_LEAK_THIS".to_owned(),
+            hunks: Vec::new(),
+        }];
+        let bundles = vec![ReviewBundle {
+            id: "instructions".to_owned(),
+            paths: vec!["AGENTS.md".to_owned()],
+            hunk_count: 1,
+            risk: RiskLevel::Low,
+            related_files: Vec::new(),
+        }];
+        let config = ReviewConfig {
+            instructions: vec!["ALSO_DO_NOT_LEAK".to_owned()],
+            ..ReviewConfig::default()
+        };
+        let prompt = review_prompt(ReviewAgent::Documentation, &bundles, &files, "", &config);
+        assert!(!prompt.contains("DO_NOT_LEAK_THIS"));
+        assert!(!prompt.contains("ALSO_DO_NOT_LEAK"));
     }
 }

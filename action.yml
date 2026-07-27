@@ -24,7 +24,7 @@ inputs:
     required: false
     default: "false"
   review_model:
-    description: "OpenRouter model used by review and audit agents."
+    description: "OpenRouter model used by routing and specialist review agents."
     required: false
     default: "deepseek/deepseek-v4-flash"
   verification_model:
@@ -44,7 +44,7 @@ inputs:
     required: false
     default: "3.00"
   max_concurrency:
-    description: "Maximum number of concurrent review bundles."
+    description: "Maximum number of concurrent model calls."
     required: false
     default: "8"
   max_comments:

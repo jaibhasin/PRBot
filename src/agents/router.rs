@@ -2,6 +2,7 @@ use super::parse_json;
 use super::prompts;
 use crate::config::ReviewConfig;
 use crate::llm::LlmClient;
+use crate::repository::is_agent_instructions;
 use crate::types::{ReviewAgent, ReviewBundle, ReviewManifest};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -55,10 +56,10 @@ pub async fn route(
 
 fn parse_routing(raw: &str, bundles: &[ReviewBundle]) -> Result<Vec<RoutingAssignment>> {
     let response: RoutingResponse = parse_json(raw).context("parse specialist routing")?;
-    let valid_ids = bundles
+    let bundle_by_id = bundles
         .iter()
-        .map(|bundle| bundle.id.as_str())
-        .collect::<BTreeSet<_>>();
+        .map(|bundle| (bundle.id.as_str(), bundle))
+        .collect::<BTreeMap<_, _>>();
     let mut merged = BTreeMap::<ReviewAgent, (BTreeSet<String>, Vec<String>)>::new();
     for assignment in response.assignments {
         if assignment.agent == ReviewAgent::Correctness {
@@ -75,8 +76,13 @@ fn parse_routing(raw: &str, bundles: &[ReviewBundle]) -> Result<Vec<RoutingAssig
         }
         let entry = merged.entry(assignment.agent).or_default();
         for id in assignment.bundle_ids {
-            if !valid_ids.contains(id.as_str()) {
+            let Some(bundle) = bundle_by_id.get(id.as_str()) else {
                 bail!("router returned unknown bundle '{id}'");
+            };
+            if assignment.agent == ReviewAgent::Documentation
+                && bundle.paths.iter().all(|path| is_agent_instructions(path))
+            {
+                continue;
             }
             entry.0.insert(id);
         }
@@ -84,10 +90,15 @@ fn parse_routing(raw: &str, bundles: &[ReviewBundle]) -> Result<Vec<RoutingAssig
     }
     Ok(merged
         .into_iter()
-        .map(|(agent, (bundle_ids, rationales))| RoutingAssignment {
-            agent,
-            bundle_ids: bundle_ids.into_iter().collect(),
-            rationale: rationales.join("; "),
+        .filter_map(|(agent, (bundle_ids, rationales))| {
+            if bundle_ids.is_empty() {
+                return None;
+            }
+            Some(RoutingAssignment {
+                agent,
+                bundle_ids: bundle_ids.into_iter().collect(),
+                rationale: rationales.join("; "),
+            })
         })
         .collect())
 }
@@ -99,10 +110,24 @@ fn fallback_assignments(bundles: &[ReviewBundle]) -> Vec<RoutingAssignment> {
         .collect::<Vec<_>>();
     ReviewAgent::SPECIALISTS
         .into_iter()
-        .map(|agent| RoutingAssignment {
-            agent,
-            bundle_ids: bundle_ids.clone(),
-            rationale: "Router failed, so PRBot ran every specialist.".to_owned(),
+        .filter_map(|agent| {
+            let assigned = if agent == ReviewAgent::Documentation {
+                bundles
+                    .iter()
+                    .filter(|bundle| bundle.paths.iter().any(|path| !is_agent_instructions(path)))
+                    .map(|bundle| bundle.id.clone())
+                    .collect()
+            } else {
+                bundle_ids.clone()
+            };
+            if assigned.is_empty() {
+                return None;
+            }
+            Some(RoutingAssignment {
+                agent,
+                bundle_ids: assigned,
+                rationale: "Router failed, so PRBot ran every specialist.".to_owned(),
+            })
         })
         .collect()
 }
@@ -122,7 +147,9 @@ struct RoutingAssignmentResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::Budget;
     use crate::types::RiskLevel;
+    use std::sync::Arc;
 
     fn bundles() -> Vec<ReviewBundle> {
         vec![
@@ -176,5 +203,37 @@ mod tests {
         assert!(assignments
             .iter()
             .all(|assignment| assignment.bundle_ids.len() == 2));
+    }
+
+    #[test]
+    fn documentation_assignment_excludes_agent_instruction_only_bundle() {
+        let mut candidates = bundles();
+        candidates.push(ReviewBundle {
+            id: "instructions".to_owned(),
+            paths: vec!["nested/AGENTS.md".to_owned()],
+            hunk_count: 1,
+            risk: RiskLevel::Low,
+            related_files: Vec::new(),
+        });
+        let raw = r#"{"assignments":[{"agent":"documentation","bundle_ids":["instructions"],"rationale":"instructions changed"}]}"#;
+        let assignments = parse_routing(raw, &candidates).expect("routing");
+        assert!(assignments.is_empty());
+    }
+
+    #[tokio::test]
+    async fn routing_timeout_fails_open_to_every_specialist() {
+        let budget = Arc::new(Budget::new(0, 10_000, 1.0));
+        let client = LlmClient::new("key", Some("http://127.0.0.1:1/chat".to_owned()), budget, 1)
+            .expect("client");
+        let bundles = bundles();
+        let decision = route(
+            &client,
+            &ReviewManifest::default(),
+            &bundles,
+            &ReviewConfig::default(),
+        )
+        .await;
+        assert!(decision.fallback);
+        assert_eq!(decision.assignments.len(), ReviewAgent::SPECIALISTS.len());
     }
 }

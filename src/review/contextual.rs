@@ -158,12 +158,7 @@ pub async fn run_review(
         pr_context.to_owned(),
     ));
     let result = if selected_bundles.is_empty() && incremental {
-        agents::AgentReviewResult {
-            findings: Vec::new(),
-            failed_bundles: Vec::new(),
-            agent_runs: Vec::new(),
-            router_fallback: false,
-        }
+        agents::empty_result()
     } else {
         match config.engine {
             ReviewEngine::Contextual => {
@@ -220,7 +215,7 @@ pub async fn run_review(
     if let Some(command_id) = command_id {
         state.handled_comment_ids.insert(command_id);
     }
-    state.version = 1;
+    state.version = 2;
     state.reviewed_sha = pull_request.head.sha.clone();
     let coverage_complete = manifest.complete() && failed_bundles.is_empty() && unanchored == 0;
     let status = if selected_bundles.is_empty() && incremental {
@@ -285,15 +280,13 @@ pub async fn run_review(
     } else {
         github.create_issue_comment(pr_number, &summary).await?;
     }
-    let check_failed = !coverage_complete || !state.fingerprints.is_empty();
+    let blocking_findings = state.blocking_findings();
+    let check_failed = !coverage_complete || blocking_findings > 0;
     let (conclusion, title) = if check_failed {
         (
             CheckConclusion::Failure,
             if coverage_complete {
-                format!(
-                    "PRBot found {} required change(s)",
-                    state.fingerprints.len()
-                )
+                format!("PRBot found {} required change(s)", blocking_findings)
             } else {
                 "PRBot review incomplete".to_owned()
             },

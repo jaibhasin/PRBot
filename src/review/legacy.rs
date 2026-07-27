@@ -58,32 +58,47 @@ pub async fn review(
             .unwrap_or(trimmed);
         serde_json::from_str::<FindingResponse>(candidate).map_err(Into::into)
     }) {
-        Ok(response) => AgentReviewResult {
-            findings: response.findings,
-            failed_bundles: Vec::new(),
-            agent_runs: vec![legacy_run(AgentStatus::Completed)],
-            router_fallback: false,
-        },
+        Ok(response) => {
+            let mut findings = response.findings;
+            for finding in &mut findings {
+                finding.agent = ReviewAgent::Correctness;
+            }
+            let finding_count = findings.len();
+            AgentReviewResult {
+                findings,
+                failed_bundles: Vec::new(),
+                agent_runs: vec![legacy_run(
+                    AgentStatus::Completed,
+                    finding_count,
+                    finding_count,
+                )],
+                router_fallback: false,
+            }
+        }
         Err(error) => {
             eprintln!("legacy review failed: {error:#}");
             AgentReviewResult {
                 findings: Vec::new(),
                 failed_bundles: vec!["legacy-review".to_owned()],
-                agent_runs: vec![legacy_run(AgentStatus::Failed)],
+                agent_runs: vec![legacy_run(AgentStatus::Failed, 0, 0)],
                 router_fallback: false,
             }
         }
     }
 }
 
-fn legacy_run(status: AgentStatus) -> AgentRun {
+fn legacy_run(
+    status: AgentStatus,
+    candidate_findings: usize,
+    accepted_findings: usize,
+) -> AgentRun {
     AgentRun {
         agent: ReviewAgent::Correctness,
         status,
         bundle_ids: vec!["legacy-review".to_owned()],
         rationale: "Legacy rollback reviewer.".to_owned(),
-        candidate_findings: 0,
-        accepted_findings: 0,
+        candidate_findings,
+        accepted_findings,
     }
 }
 

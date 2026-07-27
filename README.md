@@ -14,9 +14,10 @@ PRBot does more than send GitHub patch fragments to one model.
 3. It computes the authoritative local diff, including deletions, renames, and multiline changes.
 4. It builds a relationship map from imports, symbols, references, matching tests, manifests, and directory structure.
 5. It assigns every eligible changed hunk to a semantic review bundle.
-6. It reviews bundles concurrently with bounded read-only tools.
-7. It runs a cross-bundle audit and independently verifies every candidate finding.
-8. It resolves exact diff anchors, removes duplicates, creates one formal GitHub review, and updates one persistent summary.
+6. It asks a routing agent to select architecture, security, performance, and documentation specialists for relevant bundles.
+7. It always runs correctness reviewers, then runs the selected specialists concurrently with bounded read-only tools.
+8. It independently verifies every candidate finding.
+9. It resolves exact diff anchors, removes duplicates, creates one sectioned GitHub review, updates one persistent summary, and publishes a check against the pull request head.
 
 Syntax-aware symbol extraction supports Rust, TypeScript, JavaScript, Python, and Go.
 Other supported source and configuration files use import heuristics and bounded code search.
@@ -61,7 +62,7 @@ on:
     types: [created]
 
 permissions:
-  checks: read
+  checks: write
   contents: read
   pull-requests: write
   issues: write
@@ -92,17 +93,17 @@ Action inputs are hard ceilings:
 
 | Input | Default | Purpose |
 | --- | ---: | --- |
-| `review_model` | `deepseek/deepseek-v4-flash` | Review and audit model |
+| `review_model` | `deepseek/deepseek-v4-flash` | Routing and specialist model |
 | `verification_model` | `deepseek/deepseek-v4-flash` | Independent verification model |
 | `max_review_minutes` | `15` | Wall-clock deadline |
 | `max_input_tokens` | `500000` | Total estimated input-token ceiling |
 | `max_cost_usd` | `3.00` | Estimated model-cost ceiling |
-| `max_concurrency` | `8` | Concurrent semantic bundles |
+| `max_concurrency` | `8` | Concurrent model calls |
 | `max_comments` | `12` | Maximum published inline findings |
 | `engine` | `contextual` | Default multi-agent engine; set `legacy` to roll back |
 | `dry_run` | `false` | Build and print the manifest without LLM or GitHub writes |
 
-The review and verification model IDs must be different.
+PRBot currently uses `deepseek/deepseek-v4-flash` for both review and independent verification.
 Model defaults should be re-pinned after the evaluation suite in [`evals/README.md`](evals/README.md) passes.
 Keep `engine: legacy` available as a temporary rollback while you measure quality on real PRs.
 A 50-case fixture catalog skeleton lives in [`evals/fixtures/`](evals/fixtures/); cases remain pending adjudication until labeled.
@@ -129,8 +130,18 @@ Hierarchical `AGENTS.md` files from the base revision are also applied to matchi
 ## Review output
 
 PRBot publishes at most one formal review per run.
+The review contains separate correctness, architecture, security, performance, and documentation sections.
+Each section reports whether its agent was completed, skipped by the router, or failed.
 It supports right-side additions, left-side deletions, context lines, multiline anchors, and file-level fallback when an anchor is ambiguous.
 The model supplies exact anchor text, while deterministic code resolves and validates the GitHub line range.
+
+The Documentation Steward reports concrete drift in README files, `docs/**/*.md`, and user-facing examples.
+It names the required correction but never writes repository files and never requests changes to `AGENTS.md`.
+
+PRBot publishes a `PRBot review` check against the exact pull request head.
+The check succeeds only when coverage is complete and no verified findings remain.
+It fails for required findings, agent failures, exhausted budgets, or incomplete coverage.
+Repositories can require this check in branch protection.
 
 On later pushes, PRBot reviews only bundles affected since the previous reviewed head while retaining full-PR context.
 Stable fingerprints prevent unchanged findings from being reposted.
@@ -143,6 +154,8 @@ It reports:
 - Eligible and assigned hunk coverage.
 - Whether the run was incremental and how many bundles were reviewed.
 - Published and rejected findings.
+- Active unresolved findings.
+- Routing decisions and status for every review agent.
 - Failed or truncated stages.
 - Reviewer and verifier model IDs.
 - Input tokens, output tokens, estimated cost, and elapsed time.
@@ -172,7 +185,7 @@ Important source boundaries:
 ```text
 src/review/       Event authorization and orchestration
 src/repository/   Git snapshots, diffs, context graph, and read-only tools
-src/agents/       Parallel reviewers, cross-bundle audit, and verification
+src/agents/       Routing, parallel specialist reviewers, and verification
 src/reporting/    Anchor resolution, fingerprints, and summary state
 src/github/       Paginated GitHub API client and batched publishing
 src/llm.rs        OpenRouter tool loop, concurrency, and budget ledger

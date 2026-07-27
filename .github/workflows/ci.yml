@@ -35,7 +35,9 @@ jobs:
         run: cargo test
 
       - name: Evaluation scorer smoke test
-        run: python3 scripts/evaluate.py evals/sample.jsonl --allow-small-sample
+        run: |
+          python3 scripts/evaluate.py evals/sample.jsonl --allow-small-sample
+          python3 scripts/evaluate_routing.py evals/router/sample-results.jsonl
 
       - name: Fixture catalog present
         run: |
