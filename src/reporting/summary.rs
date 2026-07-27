@@ -173,7 +173,7 @@ pub fn render_summary(
         .map(|count| count.to_string())
         .unwrap_or_else(|| "all".to_owned());
     let encoded = serde_json::to_string(state).unwrap_or_else(|_| "{}".to_owned());
-    let agent_sections = render_agent_sections(&outcome.agent_runs, outcome.router_fallback);
+    let agent_sections = render_agent_sections(&outcome.agent_runs);
     format!(
         "{SUMMARY_MARKER}\n\
 **PRBot contextual review: {status}**\n\n\
@@ -203,21 +203,16 @@ Budget: `{}` input tokens, `{}` output tokens, `${:.4}` estimated, `{}s`\n\n\
     )
 }
 
-/// Renders the combined formal review body with one section per review agent.
-pub fn render_review_body(agent_runs: &[AgentRun], router_fallback: bool) -> String {
+/// Renders the combined formal review body with the primary reviewer status.
+pub fn render_review_body(agent_runs: &[AgentRun]) -> String {
     format!(
         "PRBot independently verified the inline findings below.\n\n{}",
-        render_agent_sections(agent_runs, router_fallback)
+        render_agent_sections(agent_runs)
     )
 }
 
-/// Renders stable, ordered status sections for all review agents.
-pub fn render_agent_sections(agent_runs: &[AgentRun], router_fallback: bool) -> String {
-    let fallback = if router_fallback {
-        "> Router fallback: routing failed, so every specialist ran.\n\n"
-    } else {
-        ""
-    };
+/// Renders stable status sections for the primary reviewer.
+pub fn render_agent_sections(agent_runs: &[AgentRun]) -> String {
     let sections = agent_runs
         .iter()
         .map(|run| {
@@ -245,7 +240,7 @@ pub fn render_agent_sections(agent_runs: &[AgentRun], router_fallback: bool) -> 
         })
         .collect::<Vec<_>>()
         .join("\n");
-    format!("## Agent review\n\n{fallback}{sections}")
+    format!("## Precision review\n\n{sections}")
 }
 
 /// Extracts the persisted review state embedded in a summary body.

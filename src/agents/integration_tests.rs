@@ -1,4 +1,4 @@
-use super::review_manifest;
+use super::{review_bundles, review_manifest};
 use crate::config::ReviewConfig;
 use crate::llm::{Budget, LlmClient};
 use crate::repository::{GitRepository, RepositoryTools};
@@ -16,11 +16,9 @@ use std::thread;
 use std::thread::JoinHandle;
 
 #[tokio::test]
-async fn routes_reviews_and_verifies_findings_end_to_end() {
+async fn primary_reviewer_verifies_findings_end_to_end() {
     let (address, server) = mock_server(vec![
-        r#"{"assignments":[{"agent":"architecture","bundle_ids":["bundle"],"rationale":"public contract changed"}]}"#,
         r#"{"findings":[{"path":"src/lib.rs","side":"RIGHT","anchor":"pub fn value() -> i32 { 2 }","priority":"P1","category":"correctness","title":"Changed result","body":"Existing callers require one.","evidence":[],"confidence":0.95}]}"#,
-        r#"{"findings":[]}"#,
         r#"{"accepted_indices":[0]}"#,
     ]);
 
@@ -41,33 +39,22 @@ async fn routes_reviews_and_verifies_findings_end_to_end() {
     let result = review_manifest(&client, tools, &manifest, &config).await;
 
     assert!(result.failed_bundles.is_empty());
-    assert!(!result.router_fallback);
     assert_eq!(result.findings.len(), 1);
-    assert_eq!(result.findings[0].agent, ReviewAgent::Correctness);
-    let architecture = result
-        .agent_runs
-        .iter()
-        .find(|run| run.agent == ReviewAgent::Architecture)
-        .expect("architecture run");
-    assert_eq!(architecture.bundle_ids, ["bundle"]);
-    let security = result
-        .agent_runs
-        .iter()
-        .find(|run| run.agent == ReviewAgent::Security)
-        .expect("security run");
-    assert!(security.bundle_ids.is_empty());
+    assert_eq!(result.findings[0].agent, ReviewAgent::Primary);
+    assert_eq!(result.agent_runs.len(), 1);
+    assert_eq!(result.agent_runs[0].agent, ReviewAgent::Primary);
+    assert_eq!(result.agent_runs[0].bundle_ids, ["bundle"]);
     let requests = server.join().expect("server");
-    assert_eq!(requests.len(), 4);
-    assert!(requests[0].contains("Route these review bundles"));
-    assert!(requests[3].contains("accepted_indices"));
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].contains("Review these selected pull-request bundles"));
+    assert!(!requests[0].contains("Route these review bundles"));
+    assert!(requests[1].contains("accepted_indices"));
 }
 
 #[tokio::test]
 async fn verifier_failure_marks_review_coverage_incomplete() {
     let (address, server) = mock_server(vec![
-        r#"{"assignments":[{"agent":"architecture","bundle_ids":["bundle"],"rationale":"public contract changed"}]}"#,
         r#"{"findings":[{"path":"src/lib.rs","side":"RIGHT","anchor":"pub fn value() -> i32 { 2 }","priority":"P1","category":"correctness","title":"Changed result","body":"Existing callers require one.","evidence":[],"confidence":0.95}]}"#,
-        r#"{"findings":[]}"#,
         "not-json",
     ]);
     let fixture = RepositoryFixture::new();
@@ -95,10 +82,84 @@ async fn verifier_failure_marks_review_coverage_incomplete() {
     let correctness = result
         .agent_runs
         .iter()
-        .find(|run| run.agent == ReviewAgent::Correctness)
-        .expect("correctness");
+        .find(|run| run.agent == ReviewAgent::Primary)
+        .expect("primary");
     assert_eq!(correctness.candidate_findings, 1);
-    assert_eq!(server.join().expect("server").len(), 4);
+    assert_eq!(server.join().expect("server").len(), 2);
+}
+
+#[tokio::test]
+async fn primary_reviewer_receives_every_selected_bundle_in_one_request() {
+    let (address, server) = mock_server(vec![r#"{"findings":[]}"#]);
+    let fixture = RepositoryFixture::new();
+    let repository = Arc::new(
+        GitRepository::from_worktree(&fixture.root, &fixture.base, &fixture.head)
+            .expect("repository"),
+    );
+    let tools = Arc::new(RepositoryTools::new(repository, "PR context".to_owned()));
+    let budget = Arc::new(Budget::new(1, 100_000, 10.0));
+    let client =
+        LlmClient::new("key", Some(format!("http://{address}/chat")), budget, 1).expect("client");
+    let result = review_manifest(
+        &client,
+        tools,
+        &manifest_with_two_bundles(),
+        &ReviewConfig::default(),
+    )
+    .await;
+
+    assert!(result.failed_bundles.is_empty());
+    assert!(result.findings.is_empty());
+    assert_eq!(result.agent_runs[0].bundle_ids, ["bundle", "second"]);
+    let requests = server.join().expect("server");
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].contains("src/lib.rs"));
+    assert!(requests[0].contains("src/second.rs"));
+}
+
+#[tokio::test]
+async fn primary_reviewer_failure_skips_verification() {
+    let (address, server) = mock_server(vec!["not-json"]);
+    let fixture = RepositoryFixture::new();
+    let repository = Arc::new(
+        GitRepository::from_worktree(&fixture.root, &fixture.base, &fixture.head)
+            .expect("repository"),
+    );
+    let tools = Arc::new(RepositoryTools::new(repository, "PR context".to_owned()));
+    let budget = Arc::new(Budget::new(1, 100_000, 10.0));
+    let client =
+        LlmClient::new("key", Some(format!("http://{address}/chat")), budget, 1).expect("client");
+    let result = review_manifest(&client, tools, &manifest(), &ReviewConfig::default()).await;
+
+    assert_eq!(result.failed_bundles, ["primary-reviewer"]);
+    assert_eq!(
+        result.agent_runs[0].status,
+        crate::types::AgentStatus::Failed
+    );
+    assert_eq!(server.join().expect("server").len(), 1);
+}
+
+#[tokio::test]
+async fn empty_bundle_selection_skips_model_calls() {
+    let fixture = RepositoryFixture::new();
+    let repository = Arc::new(
+        GitRepository::from_worktree(&fixture.root, &fixture.base, &fixture.head)
+            .expect("repository"),
+    );
+    let tools = Arc::new(RepositoryTools::new(repository, "PR context".to_owned()));
+    let budget = Arc::new(Budget::new(1, 100_000, 10.0));
+    let client = LlmClient::new("key", Some("http://127.0.0.1:1/chat".to_owned()), budget, 1)
+        .expect("client");
+    let manifest = manifest();
+    let result = review_bundles(&client, tools, &manifest, &[], &ReviewConfig::default()).await;
+
+    assert!(result.findings.is_empty());
+    assert!(result.failed_bundles.is_empty());
+    assert_eq!(result.agent_runs.len(), 1);
+    assert_eq!(
+        result.agent_runs[0].status,
+        crate::types::AgentStatus::Skipped
+    );
 }
 
 fn manifest() -> ReviewManifest {
@@ -139,6 +200,35 @@ fn manifest() -> ReviewManifest {
         }],
         ..ReviewManifest::default()
     }
+}
+
+fn manifest_with_two_bundles() -> ReviewManifest {
+    let mut manifest = manifest();
+    manifest.files.push(ChangedFile {
+        path: "src/second.rs".to_owned(),
+        old_path: None,
+        status: FileStatus::Added,
+        patch: "@@ -0,0 +1 @@\n+pub fn second() {}\n".to_owned(),
+        hunks: vec![DiffHunk {
+            header: "@@ -0,0 +1 @@".to_owned(),
+            old_start: 0,
+            new_start: 1,
+            lines: vec![DiffLine {
+                side: DiffSide::Right,
+                old_line: None,
+                new_line: Some(1),
+                content: "pub fn second() {}".to_owned(),
+            }],
+        }],
+    });
+    manifest.bundles.push(ReviewBundle {
+        id: "second".to_owned(),
+        paths: vec!["src/second.rs".to_owned()],
+        hunk_count: 1,
+        risk: RiskLevel::Low,
+        related_files: Vec::new(),
+    });
+    manifest
 }
 
 struct RepositoryFixture {

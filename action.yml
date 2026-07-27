@@ -1,5 +1,5 @@
 name: "PRBot"
-description: "Multi-agent PR reviewer powered by OpenRouter, runs as a GitHub Action."
+description: "Precision-first PR reviewer powered by OpenRouter, runs as a GitHub Action."
 author: "PRBot contributors"
 
 branding:
@@ -24,7 +24,7 @@ inputs:
     required: false
     default: "false"
   review_model:
-    description: "OpenRouter model used by routing and specialist review agents."
+    description: "OpenRouter model used by the primary review agent."
     required: false
     default: "deepseek/deepseek-v4-flash"
   verification_model:

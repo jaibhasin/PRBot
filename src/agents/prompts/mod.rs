@@ -1,9 +1,7 @@
-mod router;
-mod specialists;
+mod primary;
 mod verifier;
 
-pub use router::{router_prompt, router_system};
-pub use specialists::{review_prompt, reviewer_system};
+pub use primary::{review_prompt, reviewer_system};
 pub use verifier::{verification_prompt, verifier_system};
 
 fn finding_schema() -> &'static str {

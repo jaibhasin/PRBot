@@ -10,7 +10,7 @@ mod repository;
 mod review;
 mod types;
 
-/// PRBot - multi-agent PR reviewer for GitHub Actions.
+/// PRBot - precision-first PR reviewer for GitHub Actions.
 #[derive(Debug, Parser)]
 #[command(name = "prbot", version, about, long_about = None)]
 struct Cli {
@@ -20,7 +20,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Run PR review agents and post feedback.
+    /// Run a PR review and post feedback.
     Review(Box<review::ReviewArgs>),
     /// Print build/runtime info (useful for Action smoke tests).
     Version,
