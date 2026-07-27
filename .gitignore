@@ -17,3 +17,7 @@ Cargo.lock.bak
 # Misc
 *.log
 dist/
+__pycache__/
+*.py[cod]
+/evals/qodo/data/*
+!/evals/qodo/data/.gitkeep

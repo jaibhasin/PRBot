@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import subprocess
+import tempfile
+import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
+
+import fcntl
 
 ROOT = Path(__file__).resolve().parents[3]
 QODO_ROOT = ROOT / "evals" / "qodo"
@@ -38,19 +46,45 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    text = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
+    atomic_write_text(path, text)
 
 
 def write_json(path: Path, value: Any) -> None:
+    atomic_write_text(path, json.dumps(value, indent=2, ensure_ascii=False) + "\n")
+
+
+def atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    descriptor, temporary = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def stable_hash(value: Any) -> str:
+    serialized = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def parse_pr_url(url: str) -> tuple[str, int]:
@@ -101,27 +135,71 @@ def openrouter_chat(
             {"role": "user", "content": user},
         ],
     }
-    request = urllib.request.Request(
-        OPENROUTER_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/jaibhasin/PRBot",
-            "X-Title": "PRBot Qodo Eval Harness",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=180) as response:
-            body = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OpenRouter HTTP {error.code}: {detail}") from error
+    body = None
+    attempts = max(int(os.environ.get("PRBOT_EVAL_HTTP_ATTEMPTS", "4")), 1)
+    for attempt in range(attempts):
+        request = urllib.request.Request(
+            OPENROUTER_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/jaibhasin/PRBot",
+                "X-Title": "PRBot Qodo Eval Harness",
+            },
+            method="POST",
+        )
+        try:
+            with global_request_slot():
+                with urllib.request.urlopen(request, timeout=180) as response:
+                    body = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")
+            retryable = error.code == 429 or 500 <= error.code < 600
+            if not retryable or attempt + 1 == attempts:
+                raise RuntimeError(f"OpenRouter HTTP {error.code}: {detail}") from error
+            retry_after = error.headers.get("Retry-After")
+            delay = float(retry_after) if retry_after and retry_after.isdigit() else None
+        except (TimeoutError, urllib.error.URLError) as error:
+            if attempt + 1 == attempts:
+                raise RuntimeError(f"OpenRouter request failed: {error}") from error
+            delay = None
+        if delay is None:
+            delay = min(2**attempt, 30) + random.uniform(0.0, 0.5)
+        time.sleep(delay)
+    if body is None:
+        raise RuntimeError("OpenRouter request completed without a response")
     content = body["choices"][0]["message"]["content"]
     if not isinstance(content, str) or not content.strip():
         raise RuntimeError("OpenRouter returned empty content")
     return content.strip()
+
+
+@contextmanager
+def global_request_slot():
+    directory_value = os.environ.get("PRBOT_GLOBAL_CONCURRENCY_DIR", "").strip()
+    if not directory_value:
+        yield
+        return
+    limit = max(int(os.environ.get("PRBOT_GLOBAL_CONCURRENCY_LIMIT", "12")), 1)
+    directory = Path(directory_value)
+    directory.mkdir(parents=True, exist_ok=True)
+    while True:
+        for index in range(limit):
+            handle = (directory / f"slot-{index:03d}.lock").open("a+", encoding="utf-8")
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                handle.close()
+                continue
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                handle.close()
+            return
+        time.sleep(0.05)
 
 
 def extract_json_object(raw: str) -> Any:
@@ -142,3 +220,14 @@ def prbot_version() -> str:
         if line.startswith("version"):
             return line.split("=", 1)[1].strip().strip('"')
     return "unknown"
+
+
+def prbot_revision() -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "--short=12", "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return completed.stdout.strip()
