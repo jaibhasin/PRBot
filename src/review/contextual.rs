@@ -11,6 +11,7 @@ use crate::reporting::{
 use crate::repository::{GitRepository, RepositoryTools};
 use crate::types::{DiffSide, RunOutcome, RunStatus};
 use anyhow::Result;
+use serde::Serialize;
 use std::collections::BTreeSet;
 use std::env;
 use std::sync::Arc;
@@ -18,6 +19,15 @@ use std::sync::Arc;
 pub enum ReviewResult {
     Complete,
     Stale(PullRequest),
+    Evaluated(EvalPayload),
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct EvalPayload {
+    pub repository: String,
+    pub pr_number: u64,
+    pub outcome: RunOutcome,
+    pub findings: Vec<crate::types::ResolvedFinding>,
 }
 
 /// Runs a pull request review, publishes new findings, and updates the review summary.
@@ -73,38 +83,45 @@ pub async fn run_review(
     command_id: Option<u64>,
     config: &ReviewConfig,
     budget: Arc<Budget>,
+    eval_mode: bool,
 ) -> Result<ReviewResult> {
     let previous_comment = comments
         .iter()
         .rev()
         .find(|comment| comment.body.contains(SUMMARY_MARKER));
-    let mut state = previous_comment
-        .and_then(|comment| parse_summary_state(&comment.body))
-        .unwrap_or_default();
-    for comment in github.list_review_comments(pr_number).await? {
-        if let Some(fingerprint) = finding_marker(&comment.body) {
-            state.fingerprints.insert(fingerprint);
+    let mut state = if eval_mode {
+        Default::default()
+    } else {
+        previous_comment
+            .and_then(|comment| parse_summary_state(&comment.body))
+            .unwrap_or_default()
+    };
+    if !eval_mode {
+        for comment in github.list_review_comments(pr_number).await? {
+            if let Some(fingerprint) = finding_marker(&comment.body) {
+                state.fingerprints.insert(fingerprint);
+            }
         }
-    }
-    if state.reviewed_sha == pull_request.head.sha {
-        if let Some(command_id) = command_id {
-            github
-                .create_issue_comment(
-                    pr_number,
-                    &format!(
-                        "<!-- prbot-command:{command_id} -->\nPRBot already reviewed `{}`. Push a new commit before requesting another review.",
-                        pull_request.head.sha
-                    ),
-                )
-                .await?;
-        } else {
-            println!("PRBot already reviewed head {}", pull_request.head.sha);
+        if state.reviewed_sha == pull_request.head.sha {
+            if let Some(command_id) = command_id {
+                github
+                    .create_issue_comment(
+                        pr_number,
+                        &format!(
+                            "<!-- prbot-command:{command_id} -->\nPRBot already reviewed `{}`. Push a new commit before requesting another review.",
+                            pull_request.head.sha
+                        ),
+                    )
+                    .await?;
+            } else {
+                println!("PRBot already reviewed head {}", pull_request.head.sha);
+            }
+            return Ok(ReviewResult::Complete);
         }
-        return Ok(ReviewResult::Complete);
     }
 
     let previous_sha = state.reviewed_sha.clone();
-    let incremental = !previous_sha.is_empty();
+    let incremental = !eval_mode && !previous_sha.is_empty();
     let changed_paths = if incremental {
         repository
             .changed_paths_between(&previous_sha, &pull_request.head.sha)
@@ -182,7 +199,7 @@ pub async fn run_review(
         return Ok(ReviewResult::Stale(current));
     }
 
-    if !publish.is_empty() {
+    if !eval_mode && !publish.is_empty() {
         let input = publish.iter().map(review_comment).collect::<Vec<_>>();
         let id = github
             .create_review(
@@ -223,6 +240,21 @@ pub async fn run_review(
         incremental: Some(incremental),
         reviewed_bundles: Some(selected_bundles.len()),
     };
+    if eval_mode {
+        println!(
+            "PRBot eval review ready: findings={} file_level={} coverage={}/{}",
+            publish.len(),
+            file_level_count,
+            outcome.assigned_hunks,
+            outcome.eligible_hunks
+        );
+        return Ok(ReviewResult::Evaluated(EvalPayload {
+            repository: repository_name.to_owned(),
+            pr_number,
+            outcome,
+            findings: publish,
+        }));
+    }
     let summary = render_summary(
         repository_name,
         pr_number,

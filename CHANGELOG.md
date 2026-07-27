@@ -13,6 +13,8 @@
 - `ReviewRun` plus `skipped`/`failed` run outcome statuses
 - Richer specialist roles for API, concurrency, and performance signals
 - 50-case evaluation fixture catalog skeleton under `evals/fixtures/`
+- Qodo PR-Review-Bench harness under `evals/qodo/` with batch scoreboard tracking
+- `prbot review --eval-json` mode for local benchmark runs without GitHub writes
 
 ### Changed
 - Default review engine is now `contextual`; `legacy` remains available as a rollback

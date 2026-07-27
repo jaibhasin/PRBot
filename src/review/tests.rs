@@ -55,6 +55,7 @@ fn args(base_url: &str) -> ReviewArgs {
         max_comments: 12,
         engine: "contextual".to_owned(),
         dry_run: false,
+        eval_json: false,
     }
 }
 

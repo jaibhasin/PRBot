@@ -159,6 +159,14 @@ cargo test
 docker build -t prbot .
 ```
 
+To run the Qodo benchmark harness:
+
+```bash
+./evals/qodo/scripts/run_batch.sh
+```
+
+See [`evals/qodo/README.md`](evals/qodo/README.md).
+
 Important source boundaries:
 
 ```text

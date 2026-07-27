@@ -47,6 +47,9 @@ pub struct ReviewArgs {
     pub engine: String,
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
+    /// Run a local evaluation review: skip owner auth, never write to GitHub, print JSON findings.
+    #[arg(long, env = "PRBOT_EVAL_JSON", default_value_t = false)]
+    pub eval_json: bool,
 }
 
 /// Runs a pull-request review or interactive PRBot command for the configured event.
@@ -67,6 +70,7 @@ pub struct ReviewArgs {
 pub async fn run(args: ReviewArgs) -> Result<()> {
     let repository = required(args.repository.as_deref(), "GITHUB_REPOSITORY")?.to_owned();
     let token = required(args.github_token.as_deref(), "GITHUB_TOKEN")?.to_owned();
+    let eval_json = args.eval_json || env_flag("PRBOT_EVAL_JSON");
     let event = event::read_event_payload()?;
     let pr_number = event::resolve_pr_number(args.pr_number.as_deref(), event.as_ref())?;
     let github = if let Some(base_url) = &args.github_api_url {
@@ -79,10 +83,11 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
     let automatic = matches!(&invocation, event::Invocation::Automatic);
 
     let (actor, command, comment_id) = match invocation {
-        event::Invocation::Ignored(reason) => {
+        event::Invocation::Ignored(reason) if !eval_json => {
             println!("PRBot skipped event: {reason}");
             return Ok(());
         }
+        event::Invocation::Ignored(_) => (pull_request.user.login.clone(), Command::Review, None),
         event::Invocation::Automatic => (pull_request.user.login.clone(), Command::Review, None),
         event::Invocation::Command {
             actor,
@@ -90,7 +95,7 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
             comment_id,
         } => (actor, command, Some(comment_id)),
     };
-    if !github.is_repository_admin(&actor).await? {
+    if !eval_json && !github.is_repository_admin(&actor).await? {
         if let Some(comment_id) = comment_id {
             github
                 .create_issue_comment(
@@ -104,10 +109,16 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
         println!("PRBot skipped unauthorized actor @{actor} before any model call");
         return Ok(());
     }
+    if eval_json {
+        println!("PRBot eval-json mode: owner auth skipped; GitHub writes disabled");
+    }
 
     let mut config = config_from_args(&args)?;
     let dry_run = args.dry_run || env_flag("PRBOT_DRY_RUN");
-    if !dry_run && args.openrouter_api_key.as_deref().unwrap_or("").is_empty() {
+    if eval_json && dry_run {
+        bail!("--eval-json and --dry-run cannot be combined");
+    }
+    if (!dry_run || eval_json) && args.openrouter_api_key.as_deref().unwrap_or("").is_empty() {
         bail!("missing --openrouter-api-key or OPENROUTER_API_KEY");
     }
     let budget = (!dry_run).then(|| {
@@ -199,10 +210,15 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
                     comment_id,
                     &config,
                     Arc::clone(&budget),
+                    eval_json,
                 )
                 .await?
                 {
                     contextual::ReviewResult::Complete => return Ok(()),
+                    contextual::ReviewResult::Evaluated(payload) => {
+                        println!("{}", serde_json::to_string_pretty(&payload)?);
+                        return Ok(());
+                    }
                     contextual::ReviewResult::Stale(updated) if attempt == 0 => {
                         println!(
                             "PR head changed during review; retrying once at {}",
@@ -231,6 +247,9 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
                 }
             }
             unreachable!("review retry loop always returns")
+        }
+        Command::Ask(_) | Command::Explain(_) if eval_json => {
+            bail!("--eval-json only supports review runs")
         }
         Command::Ask(question) => {
             commands::answer_command(
