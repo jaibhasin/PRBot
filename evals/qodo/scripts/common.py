@@ -170,7 +170,15 @@ def openrouter_chat(
         time.sleep(delay)
     if body is None:
         raise RuntimeError("OpenRouter request completed without a response")
-    content = body["choices"][0]["message"]["content"]
+    if not isinstance(body, dict):
+        raise RuntimeError("OpenRouter returned a non-object response")
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError("OpenRouter response is missing choices")
+    choice = choices[0]
+    if not isinstance(choice, dict) or not isinstance(choice.get("message"), dict):
+        raise RuntimeError("OpenRouter response is missing a message")
+    content = choice["message"].get("content")
     if not isinstance(content, str) or not content.strip():
         raise RuntimeError("OpenRouter returned empty content")
     return content.strip()

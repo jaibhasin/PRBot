@@ -7,6 +7,7 @@ import argparse
 from datetime import date
 
 from common import PROGRESS_DIR, batch_dir, prbot_revision, prbot_version, read_json
+from judge_scoring import percentage
 
 SCOREBOARD = PROGRESS_DIR / "SCOREBOARD.md"
 HEADER = (
@@ -19,7 +20,11 @@ HEADER = (
 
 def ensure_scoreboard() -> None:
     PROGRESS_DIR.mkdir(parents=True, exist_ok=True)
-    if SCOREBOARD.exists() and "| F1 |" in SCOREBOARD.read_text(encoding="utf-8"):
+    if SCOREBOARD.exists():
+        if "| F1 |" not in SCOREBOARD.read_text(encoding="utf-8"):
+            raise SystemExit(
+                f"{SCOREBOARD} uses an outdated header; migrate it before continuing"
+            )
         return
     SCOREBOARD.write_text(HEADER, encoding="utf-8")
 
@@ -39,8 +44,8 @@ def main() -> int:
         f"| {date.today().isoformat()} | {prbot_version()} | {prbot_revision()} | "
         f"{args.batch_id} | {args.engine} | "
         f"{metrics['cases']} | {metrics['ground_truth_total']} | "
-        f"{metrics['precision']:.2%} | {metrics['recall']:.2%} | "
-        f"{metrics['f1']:.2%} | {metrics['errors']} | "
+        f"{percentage(metrics['precision'])} | {percentage(metrics['recall'])} | "
+        f"{percentage(metrics['f1'])} | {metrics['errors']} | "
         f"{args.notes or ''} |\n"
     )
     text = SCOREBOARD.read_text(encoding="utf-8")

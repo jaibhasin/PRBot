@@ -46,26 +46,31 @@ if [[ "$LIMIT" != "0" ]]; then
   LIMIT_ARGS+=(--limit "$LIMIT")
 fi
 
-python3 categorize_gt.py \
+run_with_limit() {
+  if [[ ${#LIMIT_ARGS[@]} -gt 0 ]]; then
+    "$@" "${LIMIT_ARGS[@]}"
+  else
+    "$@"
+  fi
+}
+
+run_with_limit python3 categorize_gt.py \
   --batch-id "$BATCH_ID" \
   --model "$CATEGORIZE_MODEL" \
-  --workers "$META_WORKERS" \
-  "${LIMIT_ARGS[@]}"
+  --workers "$META_WORKERS"
 
 if [[ ! -x "$ROOT/target/release/prbot" ]]; then
   (cd "$ROOT" && cargo build --release)
 fi
 
-python3 run_prbot_batch.py \
+run_with_limit python3 run_prbot_batch.py \
   --batch-id "$BATCH_ID" \
   --engine "$ENGINE" \
-  --workers "$REVIEW_WORKERS" \
-  "${LIMIT_ARGS[@]}"
-python3 judge_results.py \
+  --workers "$REVIEW_WORKERS"
+run_with_limit python3 judge_results.py \
   --batch-id "$BATCH_ID" \
   --model "$JUDGE_MODEL" \
-  --workers "$META_WORKERS" \
-  "${LIMIT_ARGS[@]}"
+  --workers "$META_WORKERS"
 python3 record_run.py \
   --batch-id "$BATCH_ID" \
   --engine "$ENGINE" \

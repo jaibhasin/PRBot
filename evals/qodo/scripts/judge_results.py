@@ -48,14 +48,13 @@ def render_summary_md(
         "",
         "## Category breakdown",
         "",
-        "| Category | Ground truth | Matches | Precision | Recall | F1 |",
-        "| --- | ---: | ---: | ---: | ---: | ---: |",
+        "| Category | Ground truth | Matches | Recall |",
+        "| --- | ---: | ---: | ---: |",
     ]
     for category, metrics in summary["by_category"].items():
         lines.append(
             f"| {category} | {metrics['ground_truth_total']} | "
-            f"{metrics['true_positives']} | {percentage(metrics['precision'])} | "
-            f"{percentage(metrics['recall'])} | {percentage(metrics['f1'])} |"
+            f"{metrics['true_positives']} | {percentage(metrics['recall'])} |"
         )
     lines.extend(
         [

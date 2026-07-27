@@ -151,7 +151,8 @@ def main() -> int:
 
     if not pending and not output.exists():
         write_jsonl(output, [])
-    print(f"wrote {output}")
+    if output.exists():
+        print(f"wrote {output}")
     if failures:
         print(f"{len(failures)} categorization(s) failed")
         return 1

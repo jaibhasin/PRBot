@@ -10,7 +10,7 @@ from common import (
     openrouter_chat,
 )
 
-JUDGE_SCHEMA_VERSION = 2
+JUDGE_SCHEMA_VERSION = 3
 
 SYSTEM = """You are a judge for an AI pull-request review benchmark.
 Match PRBot findings to ground-truth issues by meaning.
@@ -199,6 +199,32 @@ def metrics_for_issues(
     return metric_counts(len(issue_indices), len(findings), true_positives)
 
 
+def recall_for_totals(ground_truth_total: int, true_positives: int) -> dict:
+    true_positives = max(
+        min(true_positives, ground_truth_total),
+        0,
+    )
+    recall = true_positives / ground_truth_total if ground_truth_total else None
+    return {
+        "ground_truth_total": ground_truth_total,
+        "true_positives": true_positives,
+        "false_negatives": ground_truth_total - true_positives,
+        "recall": round(recall, 4) if recall is not None else None,
+    }
+
+
+def recall_for_issues(issues: list[dict], matches: list[dict]) -> dict:
+    issue_indices = {
+        index
+        for issue in issues
+        if (index := integer(issue.get("index"))) is not None
+    }
+    return recall_for_totals(
+        len(issue_indices),
+        sum(1 for match in matches if match["issue_index"] in issue_indices),
+    )
+
+
 def judge_case(model: str, categorized: dict, prbot_row: dict) -> dict:
     issues = categorized.get("issues", [])
     findings = prbot_row.get("findings", [])
@@ -263,13 +289,12 @@ def judge_case(model: str, categorized: dict, prbot_row: dict) -> dict:
         | {"functional", "style", "other"}
     )
     by_category = {
-        category: metrics_for_issues(
+        category: recall_for_issues(
             [
                 issue
                 for issue in issues
                 if str(issue.get("category", "other")).lower() == category
             ],
-            findings,
             matches,
         )
         for category in categories
@@ -280,9 +305,8 @@ def judge_case(model: str, categorized: dict, prbot_row: dict) -> dict:
         "pr_number": categorized["pr_number"],
         **metrics_for_issues(issues, findings, matches),
         "by_category": by_category,
-        "compliance": metrics_for_issues(
+        "compliance": recall_for_issues(
             [issue for issue in issues if has_rule(issue)],
-            findings,
             matches,
         ),
         "matches": matches,
@@ -313,17 +337,28 @@ def summarize(rows: list[dict]) -> dict:
             for category in row.get("by_category", {})
         }
     )
+    empty_recall = {"ground_truth_total": 0, "true_positives": 0}
     by_category = {
-        category: metric_counts(
-            sum(row["by_category"][category]["ground_truth_total"] for row in rows),
-            sum(row["by_category"][category]["published_total"] for row in rows),
-            sum(row["by_category"][category]["true_positives"] for row in rows),
+        category: recall_for_totals(
+            sum(
+                row.get("by_category", {}).get(
+                    category,
+                    empty_recall,
+                )["ground_truth_total"]
+                for row in rows
+            ),
+            sum(
+                row.get("by_category", {}).get(
+                    category,
+                    empty_recall,
+                )["true_positives"]
+                for row in rows
+            ),
         )
         for category in categories
     }
-    compliance = metric_counts(
+    compliance = recall_for_totals(
         sum(row["compliance"]["ground_truth_total"] for row in rows),
-        sum(row["compliance"]["published_total"] for row in rows),
         sum(row["compliance"]["true_positives"] for row in rows),
     )
     return {
