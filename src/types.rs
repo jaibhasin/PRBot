@@ -338,6 +338,8 @@ pub struct RunOutcome {
     pub eligible_hunks: usize,
     pub assigned_hunks: usize,
     pub findings: usize,
+    #[serde(default)]
+    pub active_findings: usize,
     pub skipped_findings: usize,
     pub failed_bundles: Vec<String>,
     pub budget: BudgetSnapshot,

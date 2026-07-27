@@ -60,7 +60,7 @@ pub struct CheckRun {
     pub output: Option<CheckOutput>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CheckOutput {
     #[serde(default)]
     pub title: Option<String>,
@@ -75,6 +75,11 @@ pub struct PermissionResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct CreatedReview {
+    pub id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreatedCheckRun {
     pub id: u64,
 }
 
@@ -110,4 +115,19 @@ pub struct CommentRequest {
 #[derive(Debug, Serialize)]
 pub struct ReactionRequest {
     pub content: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateCheckRunRequest {
+    pub name: &'static str,
+    pub head_sha: String,
+    pub status: &'static str,
+    pub conclusion: &'static str,
+    pub output: CheckOutputRequest,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CheckOutputRequest {
+    pub title: String,
+    pub summary: String,
 }

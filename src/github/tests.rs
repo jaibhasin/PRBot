@@ -1,5 +1,5 @@
 use super::client::next_link;
-use super::{GitHubClient, ReviewInputComment};
+use super::{CheckConclusion, GitHubClient, ReviewInputComment};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
@@ -16,6 +16,13 @@ fn accepts_only_owner_and_repository_shape() {
 fn parses_next_pagination_link() {
     let link = r#"<https://api.github.com/repos/a/b/issues/1/comments?page=2>; rel="next", <https://api.github.com/repos/a/b/issues/1/comments?page=3>; rel="last""#;
     assert!(next_link(link).expect("next").ends_with("page=2"));
+}
+
+#[test]
+fn serializes_every_review_check_conclusion() {
+    assert_eq!(CheckConclusion::Success.as_str(), "success");
+    assert_eq!(CheckConclusion::Failure.as_str(), "failure");
+    assert_eq!(CheckConclusion::Cancelled.as_str(), "cancelled");
 }
 
 #[tokio::test]
@@ -91,6 +98,38 @@ async fn publishes_one_formal_review_with_multiline_comments() {
     assert!(request.contains(r#""event":"COMMENT""#));
     assert!(request.contains(r#""start_line":10"#));
     assert!(request.contains(r#""line":12"#));
+    server.join().expect("server");
+}
+
+#[tokio::test]
+async fn publishes_completed_review_check_with_requested_conclusion() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let (sender, receiver) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        sender.send(read_request(&mut stream)).expect("send");
+        stream
+            .write_all(response(r#"{"id":77}"#, None).as_bytes())
+            .expect("write");
+    });
+    let client = GitHubClient::with_base_url("token", "octocat/hello", format!("http://{address}"))
+        .expect("client");
+    let id = client
+        .create_review_check(
+            "head-sha",
+            CheckConclusion::Failure,
+            "Required changes",
+            "Security found one issue.",
+        )
+        .await
+        .expect("check");
+    assert_eq!(id, 77);
+    let request = receiver.recv().expect("request");
+    assert!(request.starts_with("POST /repos/octocat/hello/check-runs "));
+    assert!(request.contains(r#""name":"PRBot review""#));
+    assert!(request.contains(r#""head_sha":"head-sha""#));
+    assert!(request.contains(r#""conclusion":"failure""#));
     server.join().expect("server");
 }
 

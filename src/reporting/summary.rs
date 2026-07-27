@@ -1,4 +1,4 @@
-use crate::types::{ResolvedFinding, RunOutcome, RunStatus};
+use crate::types::{AgentRun, AgentStatus, ResolvedFinding, RunOutcome, RunStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,6 +13,8 @@ pub struct SummaryState {
     pub fingerprints: BTreeSet<String>,
     #[serde(default)]
     pub fingerprint_paths: BTreeMap<String, String>,
+    #[serde(default)]
+    pub fingerprint_related_paths: BTreeMap<String, BTreeSet<String>>,
     #[serde(default)]
     pub handled_comment_ids: BTreeSet<u64>,
 }
@@ -33,6 +35,7 @@ impl SummaryState {
     ///         ("fp-a".to_string(), "src/a.rs".to_string()),
     ///         ("fp-b".to_string(), "src/b.rs".to_string()),
     ///     ]),
+    ///     fingerprint_related_paths: BTreeMap::new(),
     ///     handled_comment_ids: BTreeSet::new(),
     /// };
     /// let paths = BTreeSet::from(["src/a.rs".to_string()]);
@@ -43,15 +46,22 @@ impl SummaryState {
     /// assert!(state.fingerprints.contains("fp-b"));
     /// ```
     pub fn forget_paths(&mut self, paths: &BTreeSet<String>) {
-        let stale = self
+        let mut stale = self
             .fingerprint_paths
             .iter()
             .filter(|(_, path)| paths.contains(*path))
             .map(|(fingerprint, _)| fingerprint.clone())
-            .collect::<Vec<_>>();
+            .collect::<BTreeSet<_>>();
+        stale.extend(
+            self.fingerprint_related_paths
+                .iter()
+                .filter(|(_, related)| !related.is_disjoint(paths))
+                .map(|(fingerprint, _)| fingerprint.clone()),
+        );
         for fingerprint in stale {
             self.fingerprints.remove(&fingerprint);
             self.fingerprint_paths.remove(&fingerprint);
+            self.fingerprint_related_paths.remove(&fingerprint);
         }
     }
 
@@ -71,6 +81,15 @@ impl SummaryState {
         self.fingerprints.insert(finding.fingerprint.clone());
         self.fingerprint_paths
             .insert(finding.fingerprint.clone(), finding.candidate.path.clone());
+        self.fingerprint_related_paths.insert(
+            finding.fingerprint.clone(),
+            finding
+                .candidate
+                .evidence
+                .iter()
+                .map(|span| span.path.clone())
+                .collect(),
+        );
     }
 }
 
@@ -135,6 +154,7 @@ pub fn render_summary(
         .map(|count| count.to_string())
         .unwrap_or_else(|| "all".to_owned());
     let encoded = serde_json::to_string(state).unwrap_or_else(|_| "{}".to_owned());
+    let agent_sections = render_agent_sections(&outcome.agent_runs, outcome.router_fallback);
     format!(
         "{SUMMARY_MARKER}\n\
 **PRBot contextual review: {status}**\n\n\
@@ -144,21 +164,69 @@ Coverage: `{}/{}` eligible hunks assigned  \n\
 Reviewed bundles: `{reviewed_bundles}`  \n\
 Incremental: `{incremental}`  \n\
 Published findings: `{}`  \n\
+Active unresolved findings: `{}`  \n\
 Rejected or unanchored findings: `{}`  \n\
 Failed stages: `{failures}`  \n\
 Models: `{review_model}` reviewer, `{verification_model}` verifier  \n\
 Budget: `{}` input tokens, `{}` output tokens, `${:.4}` estimated, `{}s`\n\n\
+{agent_sections}\n\
 {STATE_PREFIX}{encoded}{STATE_SUFFIX}\n",
         outcome.reviewed_sha,
         outcome.assigned_hunks,
         outcome.eligible_hunks,
         findings.len(),
+        outcome.active_findings,
         outcome.skipped_findings,
         outcome.budget.input_tokens,
         outcome.budget.output_tokens,
         outcome.budget.estimated_cost_usd,
         outcome.budget.elapsed_seconds
     )
+}
+
+/// Renders the combined formal review body with one section per review agent.
+pub fn render_review_body(agent_runs: &[AgentRun], router_fallback: bool) -> String {
+    format!(
+        "PRBot independently verified the inline findings below.\n\n{}",
+        render_agent_sections(agent_runs, router_fallback)
+    )
+}
+
+/// Renders stable, ordered status sections for all review agents.
+pub fn render_agent_sections(agent_runs: &[AgentRun], router_fallback: bool) -> String {
+    let fallback = if router_fallback {
+        "> Router fallback: routing failed, so every specialist ran.\n\n"
+    } else {
+        ""
+    };
+    let sections = agent_runs
+        .iter()
+        .map(|run| {
+            let status = match run.status {
+                AgentStatus::Skipped => "Skipped".to_owned(),
+                AgentStatus::Completed => format!(
+                    "Completed - {} verified finding(s) from {} candidate(s)",
+                    run.accepted_findings, run.candidate_findings
+                ),
+                AgentStatus::Failed => format!(
+                    "Failed - {} verified finding(s) from completed tasks",
+                    run.accepted_findings
+                ),
+            };
+            let bundles = if run.bundle_ids.is_empty() {
+                "none".to_owned()
+            } else {
+                run.bundle_ids.join(", ")
+            };
+            format!(
+                "### {}\n\n{status}. Bundles: `{bundles}`. {}\n",
+                run.agent.title(),
+                run.rationale
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("## Agent review\n\n{fallback}{sections}")
 }
 
 /// Extracts the persisted review state embedded in a summary body.
@@ -215,8 +283,9 @@ pub fn finding_body(finding: &ResolvedFinding) -> String {
         ""
     };
     format!(
-        "<!-- prbot:finding:{} -->\n**{:?} - {}**\n\n{}{}{}",
+        "<!-- prbot:finding:{} -->\n**{} - {:?} - {}**\n\n{}{}{}",
         finding.fingerprint,
+        finding.candidate.agent.title(),
         finding.candidate.priority,
         finding.candidate.title.trim(),
         finding.candidate.body.trim(),
@@ -239,6 +308,7 @@ mod tests {
             reviewed_sha: "abc".to_owned(),
             fingerprints: ["one".to_owned()].into_iter().collect(),
             fingerprint_paths: BTreeMap::from([("one".to_owned(), "src/main.rs".to_owned())]),
+            fingerprint_related_paths: BTreeMap::new(),
             handled_comment_ids: BTreeSet::new(),
         };
         let body = format!(
@@ -263,6 +333,7 @@ mod tests {
             eligible_hunks: 2,
             assigned_hunks: 1,
             findings: 0,
+            active_findings: 0,
             skipped_findings: 0,
             failed_bundles: vec!["bundle-2".to_owned()],
             budget: crate::types::BudgetSnapshot::default(),
@@ -282,6 +353,26 @@ mod tests {
         );
         assert!(summary.contains("Partial review"));
         assert!(!summary.contains("No verified findings"));
+    }
+
+    #[test]
+    fn renders_every_agent_section_and_router_fallback() {
+        let runs = crate::types::ReviewAgent::REVIEWERS
+            .into_iter()
+            .map(|agent| AgentRun {
+                agent,
+                status: AgentStatus::Completed,
+                bundle_ids: vec!["bundle".to_owned()],
+                rationale: "Selected for test.".to_owned(),
+                candidate_findings: 1,
+                accepted_findings: 1,
+            })
+            .collect::<Vec<_>>();
+        let body = render_review_body(&runs, true);
+        for agent in crate::types::ReviewAgent::REVIEWERS {
+            assert!(body.contains(&format!("### {}", agent.title())));
+        }
+        assert!(body.contains("Router fallback"));
     }
 
     #[test]
@@ -314,5 +405,20 @@ mod tests {
         state.forget_paths(&["src/a.rs".to_owned()].into_iter().collect());
         assert!(!state.fingerprints.contains("fp-a"));
         assert!(state.fingerprints.contains("fp-b"));
+    }
+
+    #[test]
+    fn forgets_documentation_findings_when_an_evidence_path_changes() {
+        let mut state = SummaryState::default();
+        state.fingerprints.insert("docs-fp".to_owned());
+        state
+            .fingerprint_paths
+            .insert("docs-fp".to_owned(), "src/cli.rs".to_owned());
+        state.fingerprint_related_paths.insert(
+            "docs-fp".to_owned(),
+            BTreeSet::from(["README.md".to_owned()]),
+        );
+        state.forget_paths(&BTreeSet::from(["README.md".to_owned()]));
+        assert!(!state.fingerprints.contains("docs-fp"));
     }
 }

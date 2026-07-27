@@ -2,11 +2,11 @@ use super::incremental::{related_paths_for_bundles, select_bundles_for_paths};
 use super::legacy;
 use crate::agents;
 use crate::config::{ReviewConfig, ReviewEngine};
-use crate::github::{GitHubClient, IssueComment, PullRequest, ReviewInputComment};
+use crate::github::{CheckConclusion, GitHubClient, IssueComment, PullRequest, ReviewInputComment};
 use crate::llm::{Budget, LlmClient};
 use crate::reporting::{
-    deduplicate, finding_body, parse_summary_state, render_summary, resolve_findings,
-    SUMMARY_MARKER,
+    deduplicate, finding_body, parse_summary_state, render_review_body, render_summary,
+    resolve_findings, SUMMARY_MARKER,
 };
 use crate::repository::{GitRepository, RepositoryTools};
 use crate::types::{DiffSide, RunOutcome, RunStatus};
@@ -184,7 +184,13 @@ pub async fn run_review(
         }
     };
 
-    let (resolved, unanchored) = resolve_findings(result.findings, &manifest.files);
+    let agents::AgentReviewResult {
+        findings,
+        failed_bundles,
+        agent_runs,
+        router_fallback,
+    } = result;
+    let (resolved, unanchored) = resolve_findings(findings, &manifest.files);
     let file_level_count = resolved.iter().filter(|finding| finding.file_level).count();
     let resolved_count = resolved.len();
     let new_findings = deduplicate(resolved, &state.fingerprints);
@@ -198,20 +204,17 @@ pub async fn run_review(
 
     let current = github.get_pull_request(pr_number).await?;
     if current.head.sha != pull_request.head.sha {
+        if !eval_mode {
+            github
+                .create_review_check(
+                    &pull_request.head.sha,
+                    CheckConclusion::Cancelled,
+                    "PRBot review cancelled",
+                    "The pull request head changed while PRBot was reviewing it.",
+                )
+                .await?;
+        }
         return Ok(ReviewResult::Stale(current));
-    }
-
-    if !eval_mode && !publish.is_empty() {
-        let input = publish.iter().map(review_comment).collect::<Vec<_>>();
-        let id = github
-            .create_review(
-                pr_number,
-                &pull_request.head.sha,
-                "PRBot independently verified the following findings.",
-                input,
-            )
-            .await?;
-        println!("PRBot created formal review #{id}");
     }
 
     if let Some(command_id) = command_id {
@@ -219,10 +222,10 @@ pub async fn run_review(
     }
     state.version = 1;
     state.reviewed_sha = pull_request.head.sha.clone();
-    let coverage_complete = manifest.complete() && result.failed_bundles.is_empty();
+    let coverage_complete = manifest.complete() && failed_bundles.is_empty() && unanchored == 0;
     let status = if selected_bundles.is_empty() && incremental {
         RunStatus::Skipped
-    } else if !result.failed_bundles.is_empty() && publish.is_empty() && !coverage_complete {
+    } else if !failed_bundles.is_empty() && publish.is_empty() && !coverage_complete {
         RunStatus::Failed
     } else if coverage_complete {
         RunStatus::Complete
@@ -236,13 +239,14 @@ pub async fn run_review(
         eligible_hunks: manifest.eligible_hunks(),
         assigned_hunks: manifest.assigned_hunks(),
         findings: publish.len(),
+        active_findings: state.fingerprints.len(),
         skipped_findings: unanchored + duplicate_count + overflow,
-        failed_bundles: result.failed_bundles,
+        failed_bundles,
         budget: budget.snapshot().await,
         incremental: Some(incremental),
         reviewed_bundles: Some(selected_bundles.len()),
-        agent_runs: result.agent_runs,
-        router_fallback: result.router_fallback,
+        agent_runs,
+        router_fallback,
     };
     if eval_mode {
         println!(
@@ -259,6 +263,14 @@ pub async fn run_review(
             findings: publish,
         }));
     }
+    let review_body = render_review_body(&outcome.agent_runs, outcome.router_fallback);
+    if !publish.is_empty() {
+        let input = publish.iter().map(review_comment).collect::<Vec<_>>();
+        let id = github
+            .create_review(pr_number, &pull_request.head.sha, &review_body, input)
+            .await?;
+        println!("PRBot created formal review #{id}");
+    }
     let summary = render_summary(
         repository_name,
         pr_number,
@@ -273,6 +285,25 @@ pub async fn run_review(
     } else {
         github.create_issue_comment(pr_number, &summary).await?;
     }
+    let check_failed = !coverage_complete || !state.fingerprints.is_empty();
+    let (conclusion, title) = if check_failed {
+        (
+            CheckConclusion::Failure,
+            if coverage_complete {
+                format!(
+                    "PRBot found {} required change(s)",
+                    state.fingerprints.len()
+                )
+            } else {
+                "PRBot review incomplete".to_owned()
+            },
+        )
+    } else {
+        (CheckConclusion::Success, "PRBot review passed".to_owned())
+    };
+    github
+        .create_review_check(&pull_request.head.sha, conclusion, &title, &review_body)
+        .await?;
     if let Some(command_id) = command_id {
         let _ = github.create_reaction(command_id, "eyes").await;
     }
