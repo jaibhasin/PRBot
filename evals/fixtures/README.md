@@ -13,7 +13,7 @@ It must never be treated as evidence that the quality gate passed.
 ## How to progress a case
 
 1. Capture or synthesize a PR with known base/head SHAs.
-2. Run PRBot with `engine: contextual` and record published findings.
+2. Run PRBot (default engine is contextual) and record published findings.
 3. Have two reviewers label actionable precision, recall for P0/P1, and anchor validity.
 4. Adjudicate disagreements.
 5. Append the adjudicated row to a results JSONL file and score with:

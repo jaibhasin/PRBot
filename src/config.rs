@@ -41,7 +41,7 @@ impl Default for ReviewConfig {
             max_cost_usd: 3.0,
             max_concurrency: 8,
             max_comments: 12,
-            engine: ReviewEngine::Legacy,
+            engine: ReviewEngine::Contextual,
             auto_review_owner_authored: true,
             include: vec!["**/*".to_owned()],
             exclude: default_excludes(),

@@ -43,7 +43,7 @@ pub struct ReviewArgs {
     pub max_concurrency: usize,
     #[arg(long, env = "PRBOT_MAX_COMMENTS", default_value_t = 12)]
     pub max_comments: usize,
-    #[arg(long, env = "PRBOT_ENGINE", default_value = "legacy")]
+    #[arg(long, env = "PRBOT_ENGINE", default_value = "contextual")]
     pub engine: String,
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,

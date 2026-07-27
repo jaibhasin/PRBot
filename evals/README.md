@@ -1,6 +1,7 @@
 # PRBot contextual engine evaluation
 
-The contextual engine must pass this gate before `engine: contextual` becomes the Action default.
+The contextual engine is now the Action default.
+Use this gate to validate quality and decide whether to keep it, pin better models, or temporarily roll back with `engine: legacy`.
 
 Use at least 50 held-out, human-adjudicated pull request cases across Rust, TypeScript, JavaScript, Python, and Go.
 Include real historical defects, controlled mutations, clean changes, cross-file defects, and security-sensitive changes.

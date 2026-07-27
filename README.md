@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Run PRBot
-        uses: jaibhasin/PRBot@v0.1.1
+        uses: jaibhasin/PRBot@v0.2.0
         with:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -99,13 +99,12 @@ Action inputs are hard ceilings:
 | `max_cost_usd` | `3.00` | Estimated model-cost ceiling |
 | `max_concurrency` | `8` | Concurrent semantic bundles |
 | `max_comments` | `12` | Maximum published inline findings |
-| `engine` | `legacy` | `contextual` dogfood engine or legacy fallback |
+| `engine` | `contextual` | Default multi-agent engine; set `legacy` to roll back |
 | `dry_run` | `false` | Build and print the manifest without LLM or GitHub writes |
 
 The review and verification model IDs must be different.
-The release defaults should be updated only after the model pair passes the repository evaluation suite.
-Set `engine: contextual` explicitly while dogfooding the new engine.
-The default remains `legacy` until at least 50 held-out, human-adjudicated cases pass the quality gate described in [`evals/README.md`](evals/README.md).
+Model defaults should be re-pinned after the evaluation suite in [`evals/README.md`](evals/README.md) passes.
+Keep `engine: legacy` available as a temporary rollback while you measure quality on real PRs.
 A 50-case fixture catalog skeleton lives in [`evals/fixtures/`](evals/fixtures/); cases remain pending adjudication until labeled.
 
 Repositories can add a trusted `.prbot.toml` file:

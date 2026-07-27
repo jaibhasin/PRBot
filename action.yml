@@ -52,9 +52,9 @@ inputs:
     required: false
     default: "12"
   engine:
-    description: "Review engine: contextual or legacy."
+    description: "Review engine: contextual (default) or legacy rollback."
     required: false
-    default: "legacy"
+    default: "contextual"
 
 runs:
   using: "docker"

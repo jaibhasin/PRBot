@@ -3,6 +3,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-27
+
 ### Added
 - Incremental contextual reviews that re-check only bundles affected since the last reviewed head
 - File-level GitHub comment fallback for ambiguous or unresolvable anchors
@@ -13,6 +15,7 @@
 - 50-case evaluation fixture catalog skeleton under `evals/fixtures/`
 
 ### Changed
+- Default review engine is now `contextual`; `legacy` remains available as a rollback
 - Summary comments report incremental mode and reviewed bundle counts
 - Fingerprints for changed paths are cleared on incremental reruns so findings can be revalidated
 
