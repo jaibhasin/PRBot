@@ -1,166 +1,102 @@
 #!/usr/bin/env python3
-"""Judge PRBot findings against categorized Qodo ground truth using an LLM."""
+"""Run concurrent judging and write Qodo evaluation reports."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from common import (
+    atomic_write_text,
     batch_dir,
-    extract_json_object,
     load_jsonl,
-    openrouter_chat,
+    read_json,
+    stable_hash,
     write_json,
     write_jsonl,
 )
-
-SYSTEM = """You are an independent judge for an AI PR review benchmark.
-Compare PRBot findings to ground-truth issues.
-Return JSON only:
-{
-  "matches":[{"finding_index":0,"issue_index":1,"confidence":0.0,"reason":"..."}],
-  "false_positives":[{"finding_index":0,"reason":"..."}],
-  "missed_functional":[{"issue_index":1,"reason":"..."}],
-  "notes":"optional"
-}
-Matching rules:
-- Prefer file path equality and overlapping/nearby lines.
-- Semantic match on bug meaning counts even if wording differs.
-- Style ground-truth issues are out of scope for recall; do not mark them missed_functional.
-- A finding that only restates style noise is a false positive for this harness.
-"""
+from judge_scoring import (
+    JUDGE_SCHEMA_VERSION,
+    judge_case,
+    percentage,
+    summarize,
+)
 
 
-def judge_case(model: str, categorized: dict, prbot_row: dict) -> dict:
-    functional = [
-        issue for issue in categorized.get("issues", []) if issue.get("category") == "functional"
-    ]
-    findings = prbot_row.get("findings", [])
-    user = {
-        "case_id": categorized["case_id"],
-        "functional_ground_truth": [
-            {
-                "index": issue.get("index"),
-                "title": issue.get("title"),
-                "description": issue.get("description"),
-                "file_path": issue.get("file_path"),
-                "start_line": issue.get("start_line"),
-                "end_line": issue.get("end_line"),
-                "priority": issue.get("priority"),
-            }
-            for issue in functional
-        ],
-        "prbot_findings": [
-            {
-                "index": index,
-                "path": finding.get("candidate", {}).get("path"),
-                "line": finding.get("line"),
-                "start_line": finding.get("start_line"),
-                "title": finding.get("candidate", {}).get("title"),
-                "body": finding.get("candidate", {}).get("body"),
-                "priority": finding.get("candidate", {}).get("priority"),
-                "category": finding.get("candidate", {}).get("category"),
-                "file_level": finding.get("file_level"),
-            }
-            for index, finding in enumerate(findings)
-        ],
-    }
-    raw = openrouter_chat(model, SYSTEM, str(user))
-    parsed = extract_json_object(raw)
-    matches = parsed.get("matches", [])
-    false_positives = parsed.get("false_positives", [])
-    missed = parsed.get("missed_functional", [])
-    matched_findings = {int(item["finding_index"]) for item in matches if "finding_index" in item}
-    matched_issues = {int(item["issue_index"]) for item in matches if "issue_index" in item}
-
-    functional_total = len(functional)
-    published_total = len(findings)
-    true_positives = len(matched_findings)
-    # Unmatched published findings count as false positives if judge omitted them.
-    inferred_fp = [
-        {"finding_index": index, "reason": "unmatched by judge"}
-        for index in range(published_total)
-        if index not in matched_findings
-        and not any(int(item.get("finding_index", -1)) == index for item in false_positives)
-    ]
-    false_positives = list(false_positives) + inferred_fp
-    missed_count = max(functional_total - len(matched_issues), 0)
-    if not missed and missed_count:
-        missed = [
-            {"issue_index": issue.get("index"), "reason": "not matched by judge"}
-            for issue in functional
-            if int(issue.get("index", -1)) not in matched_issues
-        ]
-
-    precision = (true_positives / published_total) if published_total else 1.0
-    recall = (len(matched_issues) / functional_total) if functional_total else 1.0
-    return {
-        "case_id": categorized["case_id"],
-        "repository": categorized["repository"],
-        "pr_number": categorized["pr_number"],
-        "functional_total": functional_total,
-        "style_total": categorized.get("style_count", 0),
-        "published_total": published_total,
-        "true_positives": true_positives,
-        "false_positives_count": len(false_positives),
-        "missed_functional_count": len(missed),
-        "precision": round(precision, 4),
-        "recall": round(recall, 4),
-        "matches": matches,
-        "false_positives": false_positives,
-        "missed_functional": missed,
-        "notes": parsed.get("notes", ""),
-        "prbot_error": prbot_row.get("error"),
-    }
-
-
-def summarize(rows: list[dict]) -> dict:
-    functional_total = sum(row["functional_total"] for row in rows)
-    published_total = sum(row["published_total"] for row in rows)
-    true_positives = sum(row["true_positives"] for row in rows)
-    matched_issues = sum(row["functional_total"] - row["missed_functional_count"] for row in rows)
-    return {
-        "cases": len(rows),
-        "functional_total": functional_total,
-        "published_total": published_total,
-        "true_positives": true_positives,
-        "precision": round((true_positives / published_total) if published_total else 1.0, 4),
-        "recall": round((matched_issues / functional_total) if functional_total else 1.0, 4),
-        "errors": sum(1 for row in rows if row.get("prbot_error")),
-        "style_total": sum(row.get("style_total", 0) for row in rows),
-    }
-
-
-def render_summary_md(batch_id: str, model: str, rows: list[dict], summary: dict) -> str:
+def render_summary_md(
+    batch_id: str,
+    model: str,
+    rows: list[dict],
+    summary: dict,
+) -> str:
     lines = [
         f"# Batch {batch_id} summary",
         "",
         f"Judge model: `{model}`",
         "",
-        "## Aggregate",
+        "## All-issue Qodo score",
         "",
         f"- Cases: {summary['cases']}",
-        f"- Functional ground-truth issues: {summary['functional_total']}",
-        f"- Style issues ignored for recall: {summary['style_total']}",
+        f"- Ground-truth issues: {summary['ground_truth_total']}",
         f"- Published findings: {summary['published_total']}",
-        f"- Precision: {summary['precision']:.2%}",
-        f"- Functional recall: {summary['recall']:.2%}",
+        f"- Precision: {percentage(summary['precision'])}",
+        f"- Recall: {percentage(summary['recall'])}",
+        f"- F1: {percentage(summary['f1'])}",
         f"- PRBot errors: {summary['errors']}",
         "",
-        "## Per case",
+        "## Category breakdown",
         "",
-        "| Case | Functional | Published | Precision | Recall | Error |",
-        "| --- | ---: | ---: | ---: | ---: | --- |",
+        "| Category | Ground truth | Matches | Precision | Recall | F1 |",
+        "| --- | ---: | ---: | ---: | ---: | ---: |",
     ]
+    for category, metrics in summary["by_category"].items():
+        lines.append(
+            f"| {category} | {metrics['ground_truth_total']} | "
+            f"{metrics['true_positives']} | {percentage(metrics['precision'])} | "
+            f"{percentage(metrics['recall'])} | {percentage(metrics['f1'])} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Compliance-source breakdown",
+            "",
+            f"- Ground-truth issues: {summary['compliance']['ground_truth_total']}",
+            f"- Matches: {summary['compliance']['true_positives']}",
+            f"- Recall: {percentage(summary['compliance']['recall'])}",
+            "",
+            "## Per case",
+            "",
+            "| Case | Ground truth | Published | Precision | Recall | F1 |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
     for row in rows:
         lines.append(
-            f"| {row['case_id']} | {row['functional_total']} | {row['published_total']} | "
-            f"{row['precision']:.2%} | {row['recall']:.2%} | {row.get('prbot_error') or ''} |"
+            f"| {row['case_id']} | {row['ground_truth_total']} | "
+            f"{row['published_total']} | {percentage(row['precision'])} | "
+            f"{percentage(row['recall'])} | {percentage(row['f1'])} |"
         )
     lines.append("")
     return "\n".join(lines)
+
+
+def validate_inputs(
+    selected: list[dict],
+    categorized: dict[str, dict],
+    prbot_rows: dict[str, dict],
+) -> list[str]:
+    invalid = []
+    for case in selected:
+        case_id = case["case_id"]
+        if case_id not in categorized:
+            invalid.append(f"{case_id}: missing categorization")
+        elif case_id not in prbot_rows:
+            invalid.append(f"{case_id}: missing PRBot output")
+        elif prbot_rows[case_id].get("error"):
+            invalid.append(f"{case_id}: {prbot_rows[case_id]['error']}")
+    return invalid
 
 
 def main() -> int:
@@ -170,65 +106,103 @@ def main() -> int:
         "--model",
         default=os.environ.get("PRBOT_EVAL_JUDGE_MODEL", "deepseek/deepseek-v4-flash"),
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=int(os.environ.get("PRBOT_EVAL_META_WORKERS", "4")),
+    )
+    parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
     target = batch_dir(args.batch_id)
-    categorized = {row["case_id"]: row for row in load_jsonl(target / "categorized.jsonl")}
-    prbot_rows = {row["case_id"]: row for row in load_jsonl(target / "prbot_output.jsonl")}
+    selection = read_json(target / "selection.json")
+    selected = selection["cases"]
+    if args.limit > 0:
+        selected = selected[: args.limit]
+    categorized = {
+        row["case_id"]: row
+        for row in load_jsonl(target / "categorized.jsonl")
+    }
+    prbot_rows = {
+        row["case_id"]: row
+        for row in load_jsonl(target / "prbot_output.jsonl")
+    }
 
-    judged = []
-    for case_id, truth in categorized.items():
-        prbot_row = prbot_rows.get(case_id)
-        if prbot_row is None:
-            judged.append(
-                {
-                    "case_id": case_id,
-                    "functional_total": truth.get("functional_count", 0),
-                    "style_total": truth.get("style_count", 0),
-                    "published_total": 0,
-                    "true_positives": 0,
-                    "false_positives_count": 0,
-                    "missed_functional_count": truth.get("functional_count", 0),
-                    "precision": 1.0,
-                    "recall": 0.0,
-                    "matches": [],
-                    "false_positives": [],
-                    "missed_functional": [],
-                    "notes": "missing prbot output",
-                    "prbot_error": "missing prbot output",
-                }
-            )
-            continue
-        print(f"judging {case_id} with {args.model}")
-        if prbot_row.get("error"):
-            judged.append(
-                {
-                    "case_id": case_id,
-                    "repository": truth["repository"],
-                    "pr_number": truth["pr_number"],
-                    "functional_total": truth.get("functional_count", 0),
-                    "style_total": truth.get("style_count", 0),
-                    "published_total": 0,
-                    "true_positives": 0,
-                    "false_positives_count": 0,
-                    "missed_functional_count": truth.get("functional_count", 0),
-                    "precision": 1.0,
-                    "recall": 0.0,
-                    "matches": [],
-                    "false_positives": [],
-                    "missed_functional": [],
-                    "notes": "",
-                    "prbot_error": prbot_row.get("error"),
-                }
-            )
-            continue
-        judged.append(judge_case(args.model, truth, prbot_row))
+    invalid = validate_inputs(selected, categorized, prbot_rows)
+    if invalid:
+        print("batch is incomplete and will not be scored:")
+        for error in invalid:
+            print(f"- {error}")
+        return 1
 
-    summary = summarize(judged)
-    write_jsonl(target / "judged.jsonl", judged)
+    output = target / "judged.jsonl"
+    existing_rows = load_jsonl(output) if output.exists() else []
+    by_case = {row["case_id"]: row for row in existing_rows}
+    fingerprints = {
+        case["case_id"]: stable_hash(
+            {
+                "schema": JUDGE_SCHEMA_VERSION,
+                "model": args.model,
+                "categorized": categorized[case["case_id"]],
+                "prbot": prbot_rows[case["case_id"]],
+            }
+        )
+        for case in selected
+    }
+    pending = [
+        case
+        for case in selected
+        if args.force
+        or case["case_id"] not in by_case
+        or by_case[case["case_id"]].get("judge_input_hash")
+        != fingerprints[case["case_id"]]
+    ]
+    skipped = len(selected) - len(pending)
+    if skipped:
+        print(f"reusing {skipped} judged result(s)")
+
+    failures = []
+    workers = max(args.workers, 1)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(
+                judge_case,
+                args.model,
+                categorized[case["case_id"]],
+                prbot_rows[case["case_id"]],
+            ): case
+            for case in pending
+        }
+        for future in as_completed(futures):
+            case = futures[future]
+            case_id = case["case_id"]
+            try:
+                row = future.result()
+            except Exception as error:  # noqa: BLE001
+                failures.append((case_id, str(error)))
+                print(f"judging {case_id} failed: {error}")
+                continue
+            row["judge_input_hash"] = fingerprints[case_id]
+            by_case[case_id] = row
+            ordered = [
+                by_case[item["case_id"]]
+                for item in selection["cases"]
+                if item["case_id"] in by_case
+            ]
+            write_jsonl(output, ordered)
+            print(f"judged {case_id} with {args.model}")
+
+    if failures:
+        print(f"{len(failures)} judging task(s) failed")
+        return 1
+    rows = [by_case[case["case_id"]] for case in selected]
+    summary = summarize(rows)
+    summary["judge_model"] = args.model
+    summary["judge_schema_version"] = JUDGE_SCHEMA_VERSION
     write_json(target / "metrics.json", summary)
-    (target / "SUMMARY.md").write_text(
-        render_summary_md(args.batch_id, args.model, judged, summary),
-        encoding="utf-8",
+    atomic_write_text(
+        target / "SUMMARY.md",
+        render_summary_md(args.batch_id, args.model, rows, summary),
     )
     print(json.dumps(summary, indent=2))
     print(f"wrote {target / 'SUMMARY.md'}")
