@@ -1,4 +1,4 @@
-name: "PRBot"
+name: "PRBot Precision Review"
 description: "Precision-first PR reviewer powered by OpenRouter, runs as a GitHub Action."
 author: "PRBot contributors"
 
@@ -58,6 +58,6 @@ inputs:
 
 runs:
   using: "docker"
-  image: "docker://ghcr.io/jaibhasin/prbot:v1.0.1"
+  image: "docker://ghcr.io/jaibhasin/prbot:v1.0.2"
   args:
     - "review"

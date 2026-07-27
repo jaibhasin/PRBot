@@ -3,6 +3,11 @@
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-07-28
+
+### Changed
+- Marketplace Action display name is `PRBot Precision Review` (repo install path stays `jaibhasin/PRBot`)
+
 ## [1.0.1] - 2026-07-28
 
 ### Changed
