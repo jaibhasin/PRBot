@@ -12,6 +12,7 @@ from common import (
     atomic_write_text,
     batch_dir,
     load_jsonl,
+    prbot_row_error,
     read_json,
     stable_hash,
     write_json,
@@ -91,10 +92,13 @@ def validate_inputs(
         case_id = case["case_id"]
         if case_id not in categorized:
             invalid.append(f"{case_id}: missing categorization")
-        elif case_id not in prbot_rows:
+            continue
+        if case_id not in prbot_rows:
             invalid.append(f"{case_id}: missing PRBot output")
-        elif prbot_rows[case_id].get("error"):
-            invalid.append(f"{case_id}: {prbot_rows[case_id]['error']}")
+            continue
+        error = prbot_row_error(prbot_rows[case_id])
+        if error:
+            invalid.append(f"{case_id}: {error}")
     return invalid
 
 

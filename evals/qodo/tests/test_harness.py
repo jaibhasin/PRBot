@@ -38,6 +38,45 @@ class CommonTests(unittest.TestCase):
             common.stable_hash({"b": 2, "a": 1}),
         )
 
+    def test_failed_outcome_is_not_scorable(self):
+        error = common.prbot_row_error(
+            {
+                "outcome": {
+                    "status": "failed",
+                    "coverage_complete": False,
+                    "failed_bundles": ["bundle-1:correctness"],
+                },
+                "findings": [],
+            }
+        )
+        self.assertIn("status=failed", error)
+        self.assertIn("bundle-1:correctness", error)
+
+    def test_complete_covered_outcome_is_scorable(self):
+        self.assertIsNone(
+            common.prbot_row_error(
+                {
+                    "outcome": {
+                        "status": "complete",
+                        "coverage_complete": True,
+                    },
+                    "findings": [],
+                }
+            )
+        )
+
+    def test_partial_incomplete_coverage_is_not_scorable(self):
+        error = common.prbot_row_error(
+            {
+                "outcome": {
+                    "status": "partial",
+                    "coverage_complete": False,
+                },
+                "findings": [{"candidate": {"path": "a.rs"}}],
+            }
+        )
+        self.assertIn("coverage incomplete", error)
+
     def test_openrouter_rejects_missing_choices(self):
         response = MagicMock()
         response.__enter__.return_value.read.return_value = b'{"error":"moderated"}'
@@ -47,6 +86,48 @@ class CommonTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "missing choices"):
                 common.openrouter_chat("model", "system", "user")
+
+
+    def test_review_input_hash_changes_with_engine_and_models(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "prbot"
+            binary.write_bytes(b"binary-v1")
+            first = common.prbot_review_input_hash(binary, "contextual")
+            with patch.dict(
+                os.environ,
+                {"PRBOT_REVIEW_MODEL": "other/model"},
+                clear=False,
+            ):
+                second = common.prbot_review_input_hash(binary, "contextual")
+            third = common.prbot_review_input_hash(binary, "legacy")
+            binary.write_bytes(b"binary-v2")
+            fourth = common.prbot_review_input_hash(binary, "contextual")
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(first, third)
+        self.assertNotEqual(first, fourth)
+
+    def test_reusable_prbot_row_requires_matching_hash(self):
+        row = {
+            "outcome": {"status": "complete", "coverage_complete": True},
+            "review_input_hash": "abc",
+        }
+        self.assertTrue(common.reusable_prbot_row(row, "abc"))
+        self.assertFalse(common.reusable_prbot_row(row, "other"))
+        self.assertFalse(
+            common.reusable_prbot_row(
+                {
+                    "outcome": {"status": "failed", "coverage_complete": False},
+                    "review_input_hash": "abc",
+                },
+                "abc",
+            )
+        )
+        self.assertFalse(
+            common.reusable_prbot_row(
+                {"outcome": {"status": "complete", "coverage_complete": True}},
+                "abc",
+            )
+        )
 
 
 class CategorizeTests(unittest.TestCase):
@@ -92,6 +173,97 @@ class CategorizeTests(unittest.TestCase):
         self.assertEqual(result["categorize_model"], "v4-flash")
         self.assertEqual(result["categorize_raw"], response)
         self.assertEqual(result["functional_count"], 1)
+        self.assertEqual(
+            result["categorize_input_hash"],
+            categorize_gt.categorize_input_hash("v4-flash", self.case()),
+        )
+
+    def test_stale_categorize_fingerprint_is_rerun(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            case = self.case()
+            common.write_jsonl(target / "ground_truth.jsonl", [case])
+            common.write_jsonl(
+                target / "categorized.jsonl",
+                [
+                    {
+                        **case,
+                        "issues": [],
+                        "categorize_model": "old-model",
+                        "categorize_input_hash": "stale",
+                    }
+                ],
+            )
+            response = json.dumps(
+                {
+                    "issues": [
+                        {
+                            "index": 0,
+                            "category": "functional",
+                            "priority": "P1",
+                            "rationale": "runtime impact",
+                        }
+                    ]
+                }
+            )
+            arguments = [
+                "categorize_gt.py",
+                "--batch-id",
+                "batch-test",
+                "--model",
+                "new-model",
+            ]
+            with (
+                patch.object(categorize_gt, "batch_dir", return_value=target),
+                patch.object(sys, "argv", arguments),
+                patch.object(
+                    categorize_gt,
+                    "openrouter_chat",
+                    return_value=response,
+                ) as chat,
+            ):
+                self.assertEqual(categorize_gt.main(), 0)
+            self.assertEqual(chat.call_count, 1)
+            row = common.load_jsonl(target / "categorized.jsonl")[0]
+            self.assertEqual(row["categorize_model"], "new-model")
+            self.assertEqual(
+                row["categorize_input_hash"],
+                categorize_gt.categorize_input_hash("new-model", case),
+            )
+
+    def test_legacy_categorize_row_without_hash_is_rerun(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            case = self.case()
+            common.write_jsonl(target / "ground_truth.jsonl", [case])
+            common.write_jsonl(
+                target / "categorized.jsonl",
+                [{"case_id": case["case_id"], "issues": []}],
+            )
+            response = json.dumps(
+                {
+                    "issues": [
+                        {
+                            "index": 0,
+                            "category": "style",
+                            "priority": "P3",
+                            "rationale": "lint",
+                        }
+                    ]
+                }
+            )
+            arguments = ["categorize_gt.py", "--batch-id", "batch-test"]
+            with (
+                patch.object(categorize_gt, "batch_dir", return_value=target),
+                patch.object(sys, "argv", arguments),
+                patch.object(
+                    categorize_gt,
+                    "openrouter_chat",
+                    return_value=response,
+                ) as chat,
+            ):
+                self.assertEqual(categorize_gt.main(), 0)
+            self.assertEqual(chat.call_count, 1)
 
     def test_parallel_main_freezes_completed_categorizations(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -299,6 +471,24 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(result["recall"], 1.0)
         self.assertEqual(result["f1"], 1.0)
 
+    def test_validate_inputs_rejects_failed_outcome_without_error_field(self):
+        selected = [{"case_id": "case-1"}]
+        categorized = {"case-1": {"case_id": "case-1"}}
+        prbot_rows = {
+            "case-1": {
+                "case_id": "case-1",
+                "outcome": {
+                    "status": "failed",
+                    "coverage_complete": False,
+                    "failed_bundles": ["cross-bundle-audit"],
+                },
+                "findings": [],
+            }
+        }
+        invalid = judge_results.validate_inputs(selected, categorized, prbot_rows)
+        self.assertEqual(len(invalid), 1)
+        self.assertIn("status=failed", invalid[0])
+
     def test_parallel_judging_is_resumable(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory)
@@ -337,6 +527,10 @@ class JudgeTests(unittest.TestCase):
                 [
                     {
                         **case,
+                        "outcome": {
+                            "status": "complete",
+                            "coverage_complete": True,
+                        },
                         "findings": [
                             {
                                 "candidate": {"path": "src/main.rs"},
@@ -388,10 +582,105 @@ class ReviewOutputTests(unittest.TestCase):
     def test_extracts_last_eval_payload(self):
         stdout = (
             'log {"ignored":true}\n'
-            '{"outcome":{"status":"complete"},"findings":[]}\n'
+            '{"outcome":{"status":"complete","coverage_complete":true},"findings":[]}\n'
         )
         payload = run_prbot_batch.extract_eval_payload(stdout)
         self.assertEqual(payload["findings"], [])
+
+    def test_failed_outcome_is_marked_as_error(self):
+        case = {
+            "case_id": "case-1",
+            "repository": "owner/repo",
+            "pr_number": 1,
+            "pr_url_to_review": "https://github.com/owner/repo/pull/1",
+        }
+        completed = MagicMock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "outcome": {
+                        "status": "failed",
+                        "coverage_complete": False,
+                        "failed_bundles": ["bundle-1:correctness"],
+                    },
+                    "findings": [],
+                }
+            ),
+            stderr="budget exhausted\n",
+        )
+        with (
+            patch.object(run_prbot_batch.subprocess, "run", return_value=completed),
+            patch.dict(
+                os.environ,
+                {"GITHUB_TOKEN": "token", "OPENROUTER_API_KEY": "key"},
+            ),
+        ):
+            row = run_prbot_batch.run_one(Path("prbot"), case, "contextual", 30)
+        self.assertIn("status=failed", row["error"])
+        self.assertEqual(row["findings"], [])
+        self.assertEqual(row["outcome"]["status"], "failed")
+
+    def test_cached_failed_outcome_is_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            executable = target / "fake-prbot"
+            executable.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' "
+                """'{"outcome":{"status":"complete","coverage_complete":true},"findings":[]}'\n""",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            case = {
+                "case_id": "case-1",
+                "repository": "owner/repo",
+                "pr_number": 1,
+                "pr_url_to_review": "https://github.com/owner/repo/pull/1",
+            }
+            common.write_json(
+                target / "selection.json",
+                {"batch_id": "batch-test", "cases": [case]},
+            )
+            common.write_jsonl(
+                target / "prbot_output.jsonl",
+                [
+                    {
+                        **case,
+                        "engine": "contextual",
+                        "returncode": 0,
+                        "outcome": {
+                            "status": "failed",
+                            "coverage_complete": False,
+                            "failed_bundles": ["bundle-1"],
+                        },
+                        "findings": [],
+                    }
+                ],
+            )
+            arguments = [
+                "run_prbot_batch.py",
+                "--batch-id",
+                "batch-test",
+                "--prbot-bin",
+                str(executable),
+                "--workers",
+                "1",
+                "--attempts",
+                "1",
+            ]
+            with (
+                patch.object(run_prbot_batch, "batch_dir", return_value=target),
+                patch.object(sys, "argv", arguments),
+                patch.dict(
+                    os.environ,
+                    {"GITHUB_TOKEN": "token", "OPENROUTER_API_KEY": "key"},
+                ),
+            ):
+                self.assertEqual(run_prbot_batch.main(), 0)
+            rows = common.load_jsonl(target / "prbot_output.jsonl")
+            self.assertEqual(len(rows), 1)
+            self.assertNotIn("error", rows[0])
+            self.assertEqual(rows[0]["outcome"]["status"], "complete")
 
     def test_parallel_batch_writes_results_in_selection_order(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -400,7 +689,7 @@ class ReviewOutputTests(unittest.TestCase):
             executable.write_text(
                 "#!/bin/sh\n"
                 "printf '%s\\n' "
-                """'{"outcome":{"status":"complete"},"findings":[]}'\n""",
+                """'{"outcome":{"status":"complete","coverage_complete":true},"findings":[]}'\n""",
                 encoding="utf-8",
             )
             executable.chmod(0o755)
@@ -440,6 +729,131 @@ class ReviewOutputTests(unittest.TestCase):
                 [row["case_id"] for row in rows],
                 [case["case_id"] for case in cases],
             )
+            self.assertTrue(all(row.get("review_input_hash") for row in rows))
+
+    def test_stale_review_fingerprint_is_rerun(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            executable = target / "fake-prbot"
+            executable.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' "
+                """'{"outcome":{"status":"complete","coverage_complete":true},"findings":[{"id":1}]}'\n""",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            case = {
+                "case_id": "case-1",
+                "repository": "owner/repo",
+                "pr_number": 1,
+                "pr_url_to_review": "https://github.com/owner/repo/pull/1",
+            }
+            common.write_json(
+                target / "selection.json",
+                {"batch_id": "batch-test", "cases": [case]},
+            )
+            common.write_jsonl(
+                target / "prbot_output.jsonl",
+                [
+                    {
+                        **case,
+                        "engine": "contextual",
+                        "returncode": 0,
+                        "outcome": {
+                            "status": "complete",
+                            "coverage_complete": True,
+                        },
+                        "findings": [],
+                        "review_input_hash": "stale-hash",
+                    }
+                ],
+            )
+            arguments = [
+                "run_prbot_batch.py",
+                "--batch-id",
+                "batch-test",
+                "--prbot-bin",
+                str(executable),
+                "--workers",
+                "1",
+                "--attempts",
+                "1",
+            ]
+            with (
+                patch.object(run_prbot_batch, "batch_dir", return_value=target),
+                patch.object(sys, "argv", arguments),
+                patch.dict(
+                    os.environ,
+                    {"GITHUB_TOKEN": "token", "OPENROUTER_API_KEY": "key"},
+                ),
+            ):
+                self.assertEqual(run_prbot_batch.main(), 0)
+            rows = common.load_jsonl(target / "prbot_output.jsonl")
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(len(rows[0]["findings"]), 1)
+            self.assertNotEqual(rows[0]["review_input_hash"], "stale-hash")
+            expected = common.prbot_review_input_hash(executable, "contextual")
+            self.assertEqual(rows[0]["review_input_hash"], expected)
+
+    def test_matching_review_fingerprint_is_reused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            executable = target / "fake-prbot"
+            executable.write_text(
+                "#!/bin/sh\necho should-not-run >&2\nexit 1\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            case = {
+                "case_id": "case-1",
+                "repository": "owner/repo",
+                "pr_number": 1,
+                "pr_url_to_review": "https://github.com/owner/repo/pull/1",
+            }
+            review_hash = common.prbot_review_input_hash(executable, "contextual")
+            common.write_json(
+                target / "selection.json",
+                {"batch_id": "batch-test", "cases": [case]},
+            )
+            common.write_jsonl(
+                target / "prbot_output.jsonl",
+                [
+                    {
+                        **case,
+                        "engine": "contextual",
+                        "returncode": 0,
+                        "outcome": {
+                            "status": "complete",
+                            "coverage_complete": True,
+                        },
+                        "findings": [{"id": "cached"}],
+                        "review_input_hash": review_hash,
+                    }
+                ],
+            )
+            arguments = [
+                "run_prbot_batch.py",
+                "--batch-id",
+                "batch-test",
+                "--prbot-bin",
+                str(executable),
+                "--workers",
+                "1",
+            ]
+            stdout = StringIO()
+            with (
+                patch.object(run_prbot_batch, "batch_dir", return_value=target),
+                patch.object(sys, "argv", arguments),
+                patch.dict(
+                    os.environ,
+                    {"GITHUB_TOKEN": "token", "OPENROUTER_API_KEY": "key"},
+                ),
+                redirect_stdout(stdout),
+            ):
+                self.assertEqual(run_prbot_batch.main(), 0)
+            self.assertIn("reusing 1 successful PRBot result(s)", stdout.getvalue())
+            rows = common.load_jsonl(target / "prbot_output.jsonl")
+            self.assertEqual(rows[0]["findings"], [{"id": "cached"}])
 
 
 class ScoreboardTests(unittest.TestCase):

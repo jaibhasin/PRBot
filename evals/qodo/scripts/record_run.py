@@ -4,23 +4,11 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import subprocess
 from datetime import datetime, timezone
-from pathlib import Path
 
-from common import DATASET_PATH, ROOT, batch_dir, load_jsonl, read_json, write_json
-
-
-def file_hash(path: Path) -> str | None:
-    if not path.exists():
-        return None
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+from common import DATASET_PATH, ROOT, batch_dir, file_sha256, load_jsonl, read_json, write_json
 
 
 def git_output(*args: str) -> str:
@@ -95,8 +83,8 @@ def main() -> int:
         },
         "prbot_git_commit": git_output("rev-parse", "HEAD"),
         "prbot_git_dirty": bool(git_output("status", "--porcelain")),
-        "prbot_binary_sha256": file_hash(binary),
-        "dataset_sha256": file_hash(DATASET_PATH),
+        "prbot_binary_sha256": file_sha256(binary) if binary.exists() else None,
+        "dataset_sha256": file_sha256(DATASET_PATH) if DATASET_PATH.exists() else None,
         "reviewed_heads": reviewed_heads,
     }
     write_json(target / "run_metadata.json", metadata)

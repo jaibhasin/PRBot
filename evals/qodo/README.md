@@ -23,7 +23,12 @@ PRBOT_EVAL_LIMIT=2 ./evals/qodo/scripts/run_batch.sh   # smoke
 
 All LLM steps use `deepseek/deepseek-v4-flash`.
 
-Categorization is frozen in `categorized.jsonl` and reused on later runs.
+Resume caches are input-fingerprinted:
+- categorization reuses a case only when model, schema, and ground-truth issues match
+- PRBot reuses a case only when binary hash, engine, models, and budget settings match
+- judging already fingerprints model, schema, categorization, and PRBot output
+
+Legacy rows without a fingerprint are recomputed.
 
 Concurrency defaults: 3 PRs, 4 internal calls per PR, and 4 categorization or judging workers.
 Override with `PRBOT_EVAL_REVIEW_WORKERS`, `PRBOT_MAX_CONCURRENCY`, and `PRBOT_EVAL_META_WORKERS`.
@@ -36,5 +41,6 @@ Override with `PRBOT_EVAL_REVIEW_WORKERS`, `PRBOT_MAX_CONCURRENCY`, and `PRBOT_E
 
 - Smoke runs do not update the scoreboard.
 - Matching requires overlapping file and line locations.
+- Failed or incomplete PRBot outcomes (`status=failed|skipped`, or `coverage_complete=false`) are errors, not empty successes.
 - Category and compliance breakdowns report recall only.
 - Compare revisions using the same batch ID.

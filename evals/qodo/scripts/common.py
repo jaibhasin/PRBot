@@ -77,6 +77,29 @@ def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def prbot_row_error(row: dict[str, Any]) -> str | None:
+    """Return why a PRBot eval row is not scorable, or None when it is.
+
+    Exit code 0 with outcome.status=failed and empty findings must not be
+    treated as a successful zero-finding review.
+    """
+    existing = row.get("error")
+    if existing:
+        return str(existing)
+    outcome = row.get("outcome")
+    if not isinstance(outcome, dict):
+        return "missing PRBot outcome"
+    status = outcome.get("status")
+    if status in {"failed", "skipped"}:
+        failed = outcome.get("failed_bundles") or []
+        detail = f": {', '.join(str(item) for item in failed)}" if failed else ""
+        return f"PRBot outcome status={status}{detail}"
+    if outcome.get("coverage_complete") is not True:
+        label = status if status is not None else "unknown"
+        return f"PRBot coverage incomplete (status={label})"
+    return None
+
+
 def stable_hash(value: Any) -> str:
     serialized = json.dumps(
         value,
@@ -85,6 +108,62 @@ def stable_hash(value: Any) -> str:
         sort_keys=True,
     )
     return sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def file_sha256(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+# Bump when resume-cache fields change so old rows are recomputed.
+REVIEW_CACHE_SCHEMA = 1
+DEFAULT_REVIEW_MODEL = "deepseek/deepseek-v4-flash"
+DEFAULT_VERIFICATION_MODEL = "deepseek/deepseek-v4-flash"
+
+
+def env_or_default(name: str, default: str) -> str:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    return value.strip()
+
+
+def prbot_review_input_hash(prbot_bin: Path, engine: str) -> str:
+    """Fingerprint the binary and review settings that affect PRBot output.
+
+    Eval review workers are excluded: they only change scheduling, not a single
+    PR's review result. Internal max_concurrency is included because it can
+    change tool/agent interleaving under budget pressure.
+    """
+    return stable_hash(
+        {
+            "schema": REVIEW_CACHE_SCHEMA,
+            "engine": engine,
+            "binary_sha256": file_sha256(prbot_bin),
+            "review_model": env_or_default(
+                "PRBOT_REVIEW_MODEL", DEFAULT_REVIEW_MODEL
+            ),
+            "verification_model": env_or_default(
+                "PRBOT_VERIFICATION_MODEL", DEFAULT_VERIFICATION_MODEL
+            ),
+            "max_review_minutes": env_or_default("PRBOT_MAX_REVIEW_MINUTES", "15"),
+            "max_input_tokens": env_or_default("PRBOT_MAX_INPUT_TOKENS", "500000"),
+            "max_cost_usd": env_or_default("PRBOT_MAX_COST_USD", "3.0"),
+            "max_concurrency": env_or_default("PRBOT_MAX_CONCURRENCY", "8"),
+            "max_comments": env_or_default("PRBOT_MAX_COMMENTS", "12"),
+        }
+    )
+
+
+def reusable_prbot_row(row: dict[str, Any] | None, expected_hash: str) -> bool:
+    if not isinstance(row, dict):
+        return False
+    if prbot_row_error(row):
+        return False
+    return row.get("review_input_hash") == expected_hash
 
 
 def parse_pr_url(url: str) -> tuple[str, int]:

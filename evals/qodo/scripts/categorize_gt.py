@@ -13,6 +13,7 @@ from common import (
     extract_json_object,
     load_jsonl,
     openrouter_chat,
+    stable_hash,
     write_jsonl,
 )
 
@@ -26,6 +27,24 @@ Rules:
 Prefer functional when an issue has concrete runtime impact.
 """
 CATEGORIZE_SCHEMA_VERSION = 1
+
+
+def categorize_input_hash(model: str, case: dict) -> str:
+    """Fingerprint model, schema, and ground-truth issues for resume reuse."""
+    return stable_hash(
+        {
+            "schema": CATEGORIZE_SCHEMA_VERSION,
+            "model": model,
+            "case_id": case["case_id"],
+            "issues": case.get("issues", []),
+        }
+    )
+
+
+def reusable_categorized_row(row: dict | None, expected_hash: str) -> bool:
+    if not isinstance(row, dict):
+        return False
+    return row.get("categorize_input_hash") == expected_hash
 
 
 def categorize_case(model: str, case: dict) -> dict:
@@ -88,6 +107,7 @@ def categorize_case(model: str, case: dict) -> dict:
         "other_count": sum(1 for item in categorized if item["category"] == "other"),
         "categorize_model": model,
         "categorize_schema_version": CATEGORIZE_SCHEMA_VERSION,
+        "categorize_input_hash": categorize_input_hash(model, case),
         "categorize_raw": raw,
     }
 
@@ -117,8 +137,16 @@ def main() -> int:
     output = target / "categorized.jsonl"
     existing_rows = load_jsonl(output) if output.exists() else []
     by_case = {row["case_id"]: row for row in existing_rows}
+    fingerprints = {
+        case["case_id"]: categorize_input_hash(args.model, case) for case in selected
+    }
     pending = [
-        case for case in selected if args.force or case["case_id"] not in by_case
+        case
+        for case in selected
+        if args.force
+        or not reusable_categorized_row(
+            by_case.get(case["case_id"]), fingerprints[case["case_id"]]
+        )
     ]
     skipped = len(selected) - len(pending)
     if skipped:

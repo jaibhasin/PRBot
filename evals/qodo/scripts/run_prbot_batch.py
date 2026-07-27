@@ -11,7 +11,16 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from common import ROOT, batch_dir, load_jsonl, read_json, write_jsonl
+from common import (
+    ROOT,
+    batch_dir,
+    load_jsonl,
+    prbot_review_input_hash,
+    prbot_row_error,
+    read_json,
+    reusable_prbot_row,
+    write_jsonl,
+)
 
 
 def tail_text(value: str | bytes | None, length: int = 4000) -> str:
@@ -140,6 +149,10 @@ def run_one(prbot: Path, case: dict, engine: str, timeout_sec: int) -> dict:
         return record
     record["outcome"] = payload.get("outcome")
     record["findings"] = payload.get("findings", [])
+    outcome_error = prbot_row_error(record)
+    if outcome_error:
+        record["error"] = outcome_error
+        record["stdout_tail"] = tail_text(completed.stdout)
     return record
 
 
@@ -169,6 +182,7 @@ def main() -> int:
     if args.limit > 0:
         cases = cases[: args.limit]
     prbot = find_prbot_bin(args.prbot_bin)
+    review_hash = prbot_review_input_hash(prbot, args.engine)
 
     output = target / "prbot_output.jsonl"
     existing_rows = load_jsonl(output) if output.exists() else []
@@ -177,8 +191,7 @@ def main() -> int:
         case
         for case in cases
         if args.force
-        or case["case_id"] not in by_case
-        or by_case[case["case_id"]].get("error")
+        or not reusable_prbot_row(by_case.get(case["case_id"]), review_hash)
     ]
     skipped = len(cases) - len(pending)
     if skipped:
@@ -189,6 +202,7 @@ def main() -> int:
         for attempt in range(1, max(args.attempts, 1) + 1):
             row = run_one(prbot, case, args.engine, args.timeout_sec)
             row["attempt"] = attempt
+            row["review_input_hash"] = review_hash
             if not row.get("error"):
                 return row
             print(f"review attempt {attempt} failed for {case['case_id']}: {row['error']}")
@@ -222,14 +236,15 @@ def main() -> int:
                 if item["case_id"] in by_case
             ]
             write_jsonl(output, ordered)
-            status = "ok" if not row.get("error") else f"error: {row['error']}"
+            row_error = prbot_row_error(row)
+            status = "ok" if not row_error else f"error: {row_error}"
             print(f"{case_id}: {status} findings={len(row.get('findings', []))}")
 
     print(f"wrote {output}")
     failures = [
         case["case_id"]
         for case in cases
-        if case["case_id"] not in by_case or by_case[case["case_id"]].get("error")
+        if case["case_id"] not in by_case or prbot_row_error(by_case[case["case_id"]])
     ]
     if failures:
         print(f"{len(failures)} PRBot review(s) failed: {', '.join(failures)}")
