@@ -172,6 +172,64 @@ impl GitRepository {
         )
     }
 
+    pub fn changed_paths_between(&self, from_sha: &str, to_sha: &str) -> Result<Vec<String>> {
+        if from_sha.trim().is_empty() || from_sha == to_sha {
+            return Ok(Vec::new());
+        }
+        if !looks_like_sha(from_sha) || !looks_like_sha(to_sha) {
+            bail!("changed_paths_between requires full Git object SHAs");
+        }
+        let output = self.output_args(
+            &[
+                "diff".to_owned(),
+                "--name-only".to_owned(),
+                "-z".to_owned(),
+                "-M".to_owned(),
+                from_sha.to_owned(),
+                to_sha.to_owned(),
+            ],
+            "list paths changed since previous review",
+        )?;
+        Ok(output
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(str::to_owned)
+            .collect())
+    }
+
+    pub fn search_symbol(
+        &self,
+        revision: &str,
+        query: &str,
+        max_results: usize,
+        definitions_only: bool,
+    ) -> Result<String> {
+        if query.trim().is_empty() {
+            bail!("search query cannot be empty");
+        }
+        let sha = self.revision_sha(revision)?;
+        let mut args = vec!["grep".to_owned(), "-n".to_owned(), "-I".to_owned()];
+        if definitions_only {
+            args.push("-E".to_owned());
+            args.push("-e".to_owned());
+            args.push(definition_pattern(query));
+        } else {
+            args.push("-w".to_owned());
+            args.push("-F".to_owned());
+            args.push("-e".to_owned());
+            args.push(query.to_owned());
+        }
+        args.push("-m".to_owned());
+        args.push(max_results.min(100).to_string());
+        args.push(sha.to_owned());
+        args.push("--".to_owned());
+        match self.output_args(&args, "search repository symbols") {
+            Ok(output) => Ok(truncate_chars(&output, 10_000)),
+            Err(error) if error.to_string().contains("exit status 1") => Ok(String::new()),
+            Err(error) => Err(error),
+        }
+    }
+
     fn revision_sha(&self, revision: &str) -> Result<&str> {
         match revision {
             "base" => Ok(&self.base_sha),
@@ -179,6 +237,30 @@ impl GitRepository {
             other => bail!("invalid revision '{other}', expected base or head"),
         }
     }
+}
+
+fn looks_like_sha(value: &str) -> bool {
+    (7..=64).contains(&value.len()) && value.chars().all(|character| character.is_ascii_hexdigit())
+}
+
+fn definition_pattern(symbol: &str) -> String {
+    let escaped = regex_escape(symbol);
+    format!(
+        "(fn|func|function|def|class|struct|enum|trait|type|interface|const|let|var)\\s+{escaped}\\b|{escaped}\\s*[=:({{]"
+    )
+}
+
+fn regex_escape(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if "\\.^$|?*+()[]{}".contains(character) {
+                format!("\\{character}")
+            } else {
+                character.to_string()
+            }
+        })
+        .collect()
 }
 
 fn merge_base(

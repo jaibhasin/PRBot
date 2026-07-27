@@ -161,6 +161,8 @@ pub struct ResolvedFinding {
     pub start_line: Option<u64>,
     pub side: DiffSide,
     pub fingerprint: String,
+    #[serde(default)]
+    pub file_level: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -176,6 +178,20 @@ pub struct BudgetSnapshot {
 pub enum RunStatus {
     Complete,
     Partial,
+    Skipped,
+    Failed,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ReviewRun {
+    pub trigger: String,
+    pub actor: String,
+    pub repository: String,
+    pub pr_number: u64,
+    pub base_sha: String,
+    pub head_sha: String,
+    pub previous_head_sha: Option<String>,
+    pub incremental: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -189,4 +205,8 @@ pub struct RunOutcome {
     pub skipped_findings: usize,
     pub failed_bundles: Vec<String>,
     pub budget: BudgetSnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incremental: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_bundles: Option<usize>,
 }

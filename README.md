@@ -106,6 +106,7 @@ The review and verification model IDs must be different.
 The release defaults should be updated only after the model pair passes the repository evaluation suite.
 Set `engine: contextual` explicitly while dogfooding the new engine.
 The default remains `legacy` until at least 50 held-out, human-adjudicated cases pass the quality gate described in [`evals/README.md`](evals/README.md).
+A 50-case fixture catalog skeleton lives in [`evals/fixtures/`](evals/fixtures/); cases remain pending adjudication until labeled.
 
 Repositories can add a trusted `.prbot.toml` file:
 
@@ -129,42 +130,26 @@ Hierarchical `AGENTS.md` files from the base revision are also applied to matchi
 ## Review output
 
 PRBot publishes at most one formal review per run.
-It supports right-side additions, left-side deletions, context lines, and multiline anchors.
+It supports right-side additions, left-side deletions, context lines, multiline anchors, and file-level fallback when an anchor is ambiguous.
 The model supplies exact anchor text, while deterministic code resolves and validates the GitHub line range.
+
+On later pushes, PRBot reviews only bundles affected since the previous reviewed head while retaining full-PR context.
+Stable fingerprints prevent unchanged findings from being reposted.
+Fingerprints for changed paths are cleared so those areas can be revalidated.
 
 A single hidden-state summary comment is updated on every run.
 It reports:
 
 - Reviewed head SHA.
 - Eligible and assigned hunk coverage.
+- Whether the run was incremental and how many bundles were reviewed.
 - Published and rejected findings.
 - Failed or truncated stages.
 - Reviewer and verifier model IDs.
 - Input tokens, output tokens, estimated cost, and elapsed time.
 
-Stable fingerprints prevent unchanged findings from being reposted.
 PRBot says “No verified findings” only after complete eligible coverage.
-Partial runs are always reported as partial.
-
-## Local CLI
-
-```bash
-cargo build --release
-./target/release/prbot version
-./target/release/prbot review --help
-```
-
-A dry run requires a real pull request because it fetches and analyzes the exact base and head:
-
-```bash
-GITHUB_REPOSITORY=owner/repo \
-GITHUB_TOKEN=ghp_xxx \
-PRBOT_PR_NUMBER=1 \
-./target/release/prbot review --dry-run
-```
-
-The JSON output includes changed files, parsed hunks, ignored files, semantic bundles, risk levels, and ranked related files.
-No model call or GitHub write occurs.
+Partial and failed runs are always reported as such.
 
 ## Development
 

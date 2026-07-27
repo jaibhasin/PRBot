@@ -48,3 +48,6 @@ The scorer requires:
 
 `sample.jsonl` only verifies the scorer in CI.
 It is not a quality benchmark and is accepted only with `--allow-small-sample`.
+
+A 50-case catalog skeleton is checked into `evals/fixtures/catalog.jsonl`.
+Those rows are pending human adjudication and do not satisfy the release gate until labeled results are scored without `--allow-small-sample`.

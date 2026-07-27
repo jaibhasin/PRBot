@@ -95,6 +95,36 @@ async fn publishes_one_formal_review_with_multiline_comments() {
 }
 
 #[tokio::test]
+async fn retries_transient_write_failures() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let (sender, receiver) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let _ = read_request(&mut stream);
+        stream
+            .write_all(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .expect("write");
+        let (mut stream, _) = listener.accept().expect("accept");
+        sender.send(read_request(&mut stream)).expect("send");
+        let body = r#"{"id":1,"body":"ok","user":{"login":"owner","type":"User"}}"#;
+        stream
+            .write_all(response(body, None).as_bytes())
+            .expect("write");
+    });
+    let client = GitHubClient::with_base_url("token", "octocat/hello", format!("http://{address}"))
+        .expect("client");
+    let comment = client
+        .create_issue_comment(1, "hello")
+        .await
+        .expect("comment");
+    assert_eq!(comment.id, 1);
+    let request = receiver.recv().expect("request");
+    assert!(request.contains("hello"));
+    server.join().expect("server");
+}
+
+#[tokio::test]
 async fn treats_non_collaborator_not_found_as_unauthorized() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
     let address = listener.local_addr().expect("address");

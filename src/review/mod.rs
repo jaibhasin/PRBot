@@ -1,5 +1,7 @@
+mod commands;
 mod contextual;
 mod event;
+mod incremental;
 mod legacy;
 mod review_context;
 #[cfg(test)]
@@ -140,6 +142,20 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
             command: command.name(),
             base_sha: snapshot.repository.base_sha(),
             head_sha: snapshot.repository.head_sha(),
+            run: crate::types::ReviewRun {
+                trigger: if automatic {
+                    "automatic".to_owned()
+                } else {
+                    format!("command:{}", command.name())
+                },
+                actor: actor.clone(),
+                repository: repository.clone(),
+                pr_number,
+                base_sha: snapshot.repository.base_sha().to_owned(),
+                head_sha: snapshot.repository.head_sha().to_owned(),
+                previous_head_sha: None,
+                incremental: false,
+            },
             manifest: &snapshot.manifest,
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -202,7 +218,7 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
             unreachable!("review retry loop always returns")
         }
         Command::Ask(question) => {
-            contextual::answer_command(
+            commands::answer_command(
                 &github,
                 api_key,
                 pr_number,
@@ -217,7 +233,7 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
             .await
         }
         Command::Explain(target) => {
-            contextual::answer_command(
+            commands::answer_command(
                 &github,
                 api_key,
                 pr_number,
@@ -290,5 +306,6 @@ struct DryRunOutput<'a> {
     command: &'a str,
     base_sha: &'a str,
     head_sha: &'a str,
+    run: crate::types::ReviewRun,
     manifest: &'a crate::types::ReviewManifest,
 }

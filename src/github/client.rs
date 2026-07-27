@@ -7,6 +7,7 @@ use anyhow::{bail, Context, Result};
 use reqwest::header::LINK;
 use reqwest::{Method, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::time::Duration;
 
 const GITHUB_API_URL: &str = "https://api.github.com";
@@ -127,51 +128,59 @@ impl GitHubClient {
             comments,
         };
         let response = self
-            .request(Method::POST, &format!("pulls/{pr_number}/reviews"))
-            .json(&request)
-            .send()
-            .await
-            .context("failed to create pull request review")?;
+            .send_with_retry(
+                Method::POST,
+                &format!("pulls/{pr_number}/reviews"),
+                Some(&request),
+                "create pull request review",
+            )
+            .await?;
         let created: CreatedReview = parse_json(response, "create pull request review").await?;
         Ok(created.id)
     }
 
     pub async fn create_issue_comment(&self, pr_number: u64, body: &str) -> Result<IssueComment> {
+        let request = CommentRequest {
+            body: body.to_owned(),
+        };
         let response = self
-            .request(Method::POST, &format!("issues/{pr_number}/comments"))
-            .json(&CommentRequest {
-                body: body.to_owned(),
-            })
-            .send()
-            .await
-            .context("failed to create pull request comment")?;
+            .send_with_retry(
+                Method::POST,
+                &format!("issues/{pr_number}/comments"),
+                Some(&request),
+                "create pull request comment",
+            )
+            .await?;
         parse_json(response, "create pull request comment").await
     }
 
     pub async fn update_issue_comment(&self, comment_id: u64, body: &str) -> Result<IssueComment> {
+        let request = CommentRequest {
+            body: body.to_owned(),
+        };
         let response = self
-            .request(Method::PATCH, &format!("issues/comments/{comment_id}"))
-            .json(&CommentRequest {
-                body: body.to_owned(),
-            })
-            .send()
-            .await
-            .context("failed to update pull request comment")?;
+            .send_with_retry(
+                Method::PATCH,
+                &format!("issues/comments/{comment_id}"),
+                Some(&request),
+                "update pull request comment",
+            )
+            .await?;
         parse_json(response, "update pull request comment").await
     }
 
     pub async fn create_reaction(&self, comment_id: u64, reaction: &str) -> Result<()> {
+        let request = ReactionRequest {
+            content: reaction.to_owned(),
+        };
         let response = self
-            .request(
+            .send_with_retry(
                 Method::POST,
                 &format!("issues/comments/{comment_id}/reactions"),
+                Some(&request),
+                "create issue comment reaction",
             )
-            .json(&ReactionRequest {
-                content: reaction.to_owned(),
-            })
-            .send()
-            .await
-            .context("failed to create issue comment reaction")?;
+            .await?;
         parse_empty(response, "create issue comment reaction").await
     }
 
@@ -194,7 +203,9 @@ impl GitHubClient {
     }
 
     async fn get_json<T: DeserializeOwned>(&self, path: &str, operation: &str) -> Result<T> {
-        let response = self.send_get_with_retry(path, operation).await?;
+        let response = self
+            .send_with_retry(Method::GET, path, None::<&()>, operation)
+            .await?;
         parse_json(response, operation).await
     }
 
@@ -206,7 +217,9 @@ impl GitHubClient {
         let mut path = initial_path.to_owned();
         let mut all = Vec::new();
         loop {
-            let response = self.send_get_with_retry(&path, operation).await?;
+            let response = self
+                .send_with_retry(Method::GET, &path, None::<&()>, operation)
+                .await?;
             let next = response
                 .headers()
                 .get(LINK)
@@ -228,10 +241,24 @@ impl GitHubClient {
     }
 
     async fn send_get_with_retry(&self, path: &str, operation: &str) -> Result<Response> {
+        self.send_with_retry(Method::GET, path, None::<&()>, operation)
+            .await
+    }
+
+    async fn send_with_retry<T: Serialize + ?Sized>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&T>,
+        operation: &str,
+    ) -> Result<Response> {
         let mut delay = Duration::from_millis(250);
         for attempt in 0..3 {
-            let response = self
-                .request(Method::GET, path)
+            let mut request = self.request(method.clone(), path);
+            if let Some(body) = body {
+                request = request.json(body);
+            }
+            let response = request
                 .send()
                 .await
                 .with_context(|| format!("failed to {operation}"))?;

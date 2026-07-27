@@ -77,7 +77,7 @@ fn builds_complete_manifest_and_ranks_matching_test() {
 fn tools_are_revision_scoped_bounded_and_reject_traversal() {
     let fixture = Fixture::new();
     let repository = fixture.repository();
-    let tools = RepositoryTools::new(repository, "PR context".to_owned());
+    let tools = RepositoryTools::new(Arc::clone(&repository), "PR context".to_owned());
     let base = tools
         .execute(
             "read_file",
@@ -103,6 +103,24 @@ fn tools_are_revision_scoped_bounded_and_reject_traversal() {
         .expect("diff");
     assert!(diff.contains("+    value * 2"));
     assert!(tools.execute("run_shell", r#"{"command":"env"}"#).is_err());
+    let symbol = tools
+        .execute(
+            "find_symbol",
+            r#"{"query":"compute","revision":"head","max_results":20}"#,
+        )
+        .expect("find symbol");
+    assert!(symbol.contains("compute"));
+    let references = tools
+        .execute(
+            "find_references",
+            r#"{"query":"compute","revision":"head","max_results":20}"#,
+        )
+        .expect("find references");
+    assert!(references.contains("compute"));
+    let changed = repository
+        .changed_paths_between(&fixture.base, &fixture.head)
+        .expect("changed paths");
+    assert_eq!(changed, vec!["src/lib.rs".to_owned()]);
 }
 
 fn git(path: &Path, args: &[&str]) {

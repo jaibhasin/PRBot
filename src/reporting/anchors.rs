@@ -27,38 +27,60 @@ pub fn deduplicate(
 }
 
 fn resolve_finding(candidate: CandidateFinding, files: &[ChangedFile]) -> Option<ResolvedFinding> {
-    let file = files.iter().find(|file| file.path == candidate.path)?;
+    let file = files.iter().find(|file| {
+        file.path == candidate.path || file.old_path.as_deref() == Some(candidate.path.as_str())
+    })?;
+    let mut candidate = candidate;
+    candidate.path = file.path.clone();
+    let fingerprint = fingerprint(&candidate);
+
     let anchor_lines = candidate.anchor.lines().collect::<Vec<_>>();
-    if anchor_lines.is_empty() || anchor_lines.iter().any(|line| line.is_empty()) {
-        return None;
-    }
-    let mut matches = Vec::new();
-    for hunk in &file.hunks {
-        for start in 0..hunk.lines.len() {
-            if matches_anchor(&hunk.lines, start, &anchor_lines, candidate.side) {
-                let end = if let Some(end_anchor) = candidate.end_anchor.as_deref() {
-                    find_end(&hunk.lines, start, end_anchor, candidate.side)?
-                } else {
-                    start + anchor_lines.len() - 1
-                };
-                let start_line = side_line(&hunk.lines[start], candidate.side)?;
-                let line = side_line(&hunk.lines[end], candidate.side)?;
-                matches.push((start_line, line));
+    if !anchor_lines.is_empty() && anchor_lines.iter().all(|line| !line.is_empty()) {
+        let mut matches = Vec::new();
+        for hunk in &file.hunks {
+            for start in 0..hunk.lines.len() {
+                if matches_anchor(&hunk.lines, start, &anchor_lines, candidate.side) {
+                    let end = if let Some(end_anchor) = candidate.end_anchor.as_deref() {
+                        match find_end(&hunk.lines, start, end_anchor, candidate.side) {
+                            Some(value) => value,
+                            None => continue,
+                        }
+                    } else {
+                        start + anchor_lines.len() - 1
+                    };
+                    let Some(start_line) = side_line(&hunk.lines[start], candidate.side) else {
+                        continue;
+                    };
+                    let Some(line) = side_line(&hunk.lines[end], candidate.side) else {
+                        continue;
+                    };
+                    matches.push((start_line, line));
+                }
             }
         }
+        if matches.len() == 1 {
+            let (start, line) = matches[0];
+            let side = candidate.side;
+            return Some(ResolvedFinding {
+                candidate,
+                line: Some(line),
+                start_line: (start != line).then_some(start),
+                side,
+                fingerprint,
+                file_level: false,
+            });
+        }
     }
-    if matches.len() != 1 {
-        return None;
-    }
-    let (start, line) = matches[0];
-    let fingerprint = fingerprint(&candidate);
-    let side = candidate.side;
+
+    // Exact unique anchors are preferred. Ambiguous or missing anchors fall back to a
+    // file-level review comment so verified findings are not silently dropped.
     Some(ResolvedFinding {
+        side: candidate.side,
         candidate,
-        line: Some(line),
-        start_line: (start != line).then_some(start),
-        side,
+        line: None,
+        start_line: None,
         fingerprint,
+        file_level: true,
     })
 }
 
@@ -149,6 +171,7 @@ mod tests {
         let (resolved, skipped) = resolve_findings(vec![finding], &[file]);
         assert_eq!(skipped, 0);
         assert_eq!(resolved[0].line, Some(1));
+        assert!(!resolved[0].file_level);
     }
 
     #[test]
@@ -186,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_ambiguous_anchor() {
+    fn falls_back_to_file_level_for_ambiguous_anchor() {
         let repeated = DiffLine {
             side: DiffSide::Right,
             old_line: None,
@@ -215,8 +238,37 @@ mod tests {
         };
         let (resolved, skipped) =
             resolve_findings(vec![candidate(DiffSide::Right, "same")], &[file]);
-        assert!(resolved.is_empty());
-        assert_eq!(skipped, 1);
+        assert_eq!(skipped, 0);
+        assert_eq!(resolved.len(), 1);
+        assert!(resolved[0].file_level);
+        assert!(resolved[0].line.is_none());
+    }
+
+    #[test]
+    fn resolves_renamed_path_using_old_path() {
+        let file = ChangedFile {
+            path: "src/new.rs".to_owned(),
+            old_path: Some("src/old.rs".to_owned()),
+            status: FileStatus::Renamed,
+            patch: String::new(),
+            hunks: vec![DiffHunk {
+                header: "@@ -1 +1 @@".to_owned(),
+                old_start: 1,
+                new_start: 1,
+                lines: vec![DiffLine {
+                    side: DiffSide::Right,
+                    old_line: None,
+                    new_line: Some(1),
+                    content: "renamed".to_owned(),
+                }],
+            }],
+        };
+        let mut finding = candidate(DiffSide::Right, "renamed");
+        finding.path = "src/old.rs".to_owned();
+        let (resolved, skipped) = resolve_findings(vec![finding], &[file]);
+        assert_eq!(skipped, 0);
+        assert_eq!(resolved[0].candidate.path, "src/new.rs");
+        assert_eq!(resolved[0].line, Some(1));
     }
 
     fn candidate(side: DiffSide, anchor: &str) -> CandidateFinding {

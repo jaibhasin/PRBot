@@ -1,3 +1,4 @@
+use crate::repository::syntax::looks_like_definition;
 use crate::repository::GitRepository;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -37,7 +38,9 @@ impl RepositoryTools {
             "list_tree" => self.list_tree(arguments),
             "read_file" => self.read_file(arguments),
             "read_diff" => self.read_diff(arguments),
-            "search_code" | "find_symbol" | "find_references" => self.search(arguments),
+            "search_code" => self.search(arguments, false, false),
+            "find_symbol" => self.search(arguments, true, true),
+            "find_references" => self.search(arguments, true, false),
             "get_pr_context" => Ok(truncate(&self.pr_context, 10_000)),
             other => bail!("unknown repository tool '{other}'"),
         }
@@ -111,7 +114,7 @@ impl RepositoryTools {
         Ok(truncate(&output, 20_000))
     }
 
-    fn search(&self, arguments: &str) -> Result<String> {
+    fn search(&self, arguments: &str, word_match: bool, definitions_only: bool) -> Result<String> {
         #[derive(Deserialize)]
         struct Args {
             query: String,
@@ -121,8 +124,35 @@ impl RepositoryTools {
             max_results: usize,
         }
         let args: Args = parse(arguments)?;
-        self.repository
-            .search(&args.revision, &args.query, args.max_results)
+        let raw = if word_match {
+            self.repository.search_symbol(
+                &args.revision,
+                &args.query,
+                args.max_results,
+                definitions_only,
+            )?
+        } else {
+            self.repository
+                .search(&args.revision, &args.query, args.max_results)?
+        };
+        if !definitions_only {
+            return Ok(raw);
+        }
+        let filtered = raw
+            .lines()
+            .filter(|line| {
+                line.split_once(':')
+                    .and_then(|(_, rest)| rest.split_once(':'))
+                    .map(|(_, content)| looks_like_definition(content, &args.query))
+                    .unwrap_or(false)
+                    || looks_like_definition(line, &args.query)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(truncate(
+            if filtered.is_empty() { &raw } else { &filtered },
+            10_000,
+        ))
     }
 }
 
@@ -150,12 +180,12 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "find_symbol",
-            "Find definitions or uses of a symbol using bounded repository search.",
+            "Find likely definitions of a symbol using definition-oriented repository search.",
             search_schema(),
         ),
         tool(
             "find_references",
-            "Find references to a changed symbol using bounded repository search.",
+            "Find word-bounded references to a symbol across the repository.",
             search_schema(),
         ),
         tool(

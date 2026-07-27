@@ -20,11 +20,26 @@ pub async fn review_manifest(
     manifest: &ReviewManifest,
     config: &ReviewConfig,
 ) -> AgentReviewResult {
+    review_bundles(client, tools, manifest, &manifest.bundles, config).await
+}
+
+pub async fn review_bundles(
+    client: &LlmClient,
+    tools: Arc<RepositoryTools>,
+    manifest: &ReviewManifest,
+    bundles: &[ReviewBundle],
+    config: &ReviewConfig,
+) -> AgentReviewResult {
+    if bundles.is_empty() {
+        return AgentReviewResult {
+            findings: Vec::new(),
+            failed_bundles: Vec::new(),
+        };
+    }
     let repo_map = Arc::new(render_repo_map(manifest));
     let files = Arc::new(manifest.files.clone());
     let config = Arc::new(config.clone());
-    let tasks = manifest
-        .bundles
+    let tasks = bundles
         .iter()
         .flat_map(|bundle| {
             review_roles(bundle)
@@ -78,7 +93,7 @@ pub async fn review_manifest(
         }
     }
 
-    if manifest.bundles.len() > 1 {
+    if bundles.len() > 1 || manifest.bundles.len() > 1 {
         match run_cross_bundle_audit(client, Arc::clone(&tools), manifest, &config).await {
             Ok(mut audit_findings) => findings.append(&mut audit_findings),
             Err(error) => {
@@ -104,11 +119,42 @@ pub async fn review_manifest(
 
 fn review_roles(bundle: &ReviewBundle) -> Vec<&'static str> {
     let mut roles = vec!["correctness and reliability"];
+    let joined = bundle.paths.join(" ").to_ascii_lowercase();
     match bundle.risk {
-        RiskLevel::Critical => roles.push("security and authorization boundaries"),
-        RiskLevel::High => roles.push("concurrency, state transitions, and compatibility"),
-        RiskLevel::Low | RiskLevel::Medium => {}
+        RiskLevel::Critical => {
+            roles.push("security and authorization boundaries");
+            roles.push("api contracts and compatibility");
+        }
+        RiskLevel::High => {
+            roles.push("concurrency, state transitions, and compatibility");
+            if joined.contains("perf")
+                || joined.contains("cache")
+                || joined.contains("bench")
+                || joined.contains("hot")
+            {
+                roles.push("performance and resource usage");
+            }
+        }
+        RiskLevel::Medium => {
+            if joined.contains("api")
+                || joined.contains("schema")
+                || joined.contains("proto")
+                || joined.contains("openapi")
+            {
+                roles.push("api contracts and compatibility");
+            }
+            if joined.contains("async")
+                || joined.contains("thread")
+                || joined.contains("mutex")
+                || joined.contains("channel")
+            {
+                roles.push("concurrency and shared-state hazards");
+            }
+        }
+        RiskLevel::Low => {}
     }
+    roles.sort_unstable();
+    roles.dedup();
     roles
 }
 
@@ -209,10 +255,25 @@ struct VerificationResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::RiskLevel;
 
     #[test]
     fn rejects_empty_finding_fields() {
         let raw = r#"{"findings":[{"path":"","side":"RIGHT","anchor":"x","priority":"P1","category":"correctness","title":"Bug","body":"Impact","evidence":[],"confidence":0.9}]}"#;
         assert!(parse_findings(raw).expect("parse").is_empty());
+    }
+
+    #[test]
+    fn critical_bundles_get_security_and_api_specialists() {
+        let bundle = ReviewBundle {
+            id: "bundle-1".to_owned(),
+            paths: vec!["src/auth/api.rs".to_owned()],
+            hunk_count: 1,
+            risk: RiskLevel::Critical,
+            related_files: Vec::new(),
+        };
+        let roles = review_roles(&bundle);
+        assert!(roles.iter().any(|role| role.contains("security")));
+        assert!(roles.iter().any(|role| role.contains("api")));
     }
 }

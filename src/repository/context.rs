@@ -245,7 +245,14 @@ fn source_signals(path: &str, source: &str) -> SourceSignals {
         .take(100)
         .map(str::to_owned)
         .collect();
-    let symbols = super::syntax::symbols_for(path, source);
+    let symbols = {
+        let definitions = super::syntax::definitions_for(path, source);
+        if definitions.is_empty() {
+            super::syntax::symbols_for(path, source)
+        } else {
+            definitions
+        }
+    };
     SourceSignals { symbols, imports }
 }
 
