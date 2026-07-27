@@ -14,6 +14,14 @@ pub struct AgentReviewResult {
     pub failed_bundles: Vec<String>,
 }
 
+/// Reviews all bundles in a manifest and returns the accepted findings and failed bundle identifiers.
+///
+/// # Examples
+///
+/// ```no_run
+/// let result = review_manifest(&client, tools, &manifest, &config).await;
+/// println!("{} findings", result.findings.len());
+/// ```
 pub async fn review_manifest(
     client: &LlmClient,
     tools: Arc<RepositoryTools>,
@@ -23,6 +31,18 @@ pub async fn review_manifest(
     review_bundles(client, tools, manifest, &manifest.bundles, config).await
 }
 
+/// Reviews the specified bundles and returns verified findings together with any failed review stages.
+///
+/// Review tasks are run concurrently, followed by a cross-bundle audit when multiple bundles
+/// are available and independent verification of the collected findings.
+///
+/// # Examples
+///
+/// ```ignore
+/// let result = review_bundles(&client, tools, &manifest, &bundles, &config).await;
+/// assert!(result.failed_bundles.is_empty());
+/// ```
+pub async fn review_bundles(
 pub async fn review_bundles(
     client: &LlmClient,
     tools: Arc<RepositoryTools>,
@@ -117,6 +137,20 @@ pub async fn review_bundles(
     }
 }
 
+/// Selects review roles based on a bundle's risk level and paths.
+///
+/// # Examples
+///
+/// ```
+/// let bundle = ReviewBundle {
+///     id: "auth".to_string(),
+///     paths: vec!["src/auth.rs".to_string()],
+///     risk: RiskLevel::Critical,
+/// };
+///
+/// let roles = review_roles(&bundle);
+/// assert!(roles.iter().any(|role| role.contains("security")));
+/// ```
 fn review_roles(bundle: &ReviewBundle) -> Vec<&'static str> {
     let mut roles = vec!["correctness and reliability"];
     let joined = bundle.paths.join(" ").to_ascii_lowercase();
@@ -158,6 +192,20 @@ fn review_roles(bundle: &ReviewBundle) -> Vec<&'static str> {
     roles
 }
 
+/// Audits relationships and consistency across multiple review bundles.
+///
+/// # Errors
+///
+/// Returns an error if the audit agent fails or produces invalid findings.
+///
+/// # Examples
+///
+/// ```ignore
+/// let findings = run_cross_bundle_audit(&client, tools, &manifest, &config).await?;
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+///
+/// Returns the findings produced by the cross-bundle audit.
 async fn run_cross_bundle_audit(
     client: &LlmClient,
     tools: Arc<RepositoryTools>,
@@ -182,6 +230,24 @@ async fn run_cross_bundle_audit(
     parse_findings(&raw)
 }
 
+/// Independently verifies candidate findings and returns the accepted findings in priority order.
+///
+/// A finding is accepted only when its index is selected by the verifier, its priority is above `P3`, and its confidence is at least `0.8`.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// # async fn example(
+/// #     client: &LlmClient,
+/// #     tools: std::sync::Arc<RepositoryTools>,
+/// #     manifest: &ReviewManifest,
+/// #     config: &ReviewConfig,
+/// # ) -> Result<()> {
+/// let accepted = verify_findings(client, tools, manifest, &[], config).await?;
+/// assert!(accepted.is_empty());
+/// # Ok(())
+/// # }
+/// ```
 async fn verify_findings(
     client: &LlmClient,
     tools: Arc<RepositoryTools>,
@@ -218,6 +284,16 @@ async fn verify_findings(
     Ok(accepted)
 }
 
+/// Parses agent output into findings and discards entries with empty required fields.
+///
+/// # Examples
+///
+/// ```
+/// let findings = parse_findings(r#"{"findings":[]}"#).unwrap();
+/// assert!(findings.is_empty());
+/// ```
+///
+/// Returns the valid findings parsed from the response.
 fn parse_findings(raw: &str) -> Result<Vec<CandidateFinding>> {
     let response: FindingResponse = parse_json(raw)?;
     Ok(response
@@ -232,6 +308,16 @@ fn parse_findings(raw: &str) -> Result<Vec<CandidateFinding>> {
         .collect())
 }
 
+/// Parses agent output as JSON, including responses wrapped in a `json` code fence.
+///
+/// # Examples
+///
+/// ```
+/// let value: serde_json::Value = parse_json(r#"{"accepted": true}"#).unwrap();
+/// assert_eq!(value["accepted"], true);
+/// ```
+///
+/// Returns an error with context when the input is not valid JSON.
 fn parse_json<T: for<'de> Deserialize<'de>>(raw: &str) -> Result<T> {
     let trimmed = raw.trim();
     let candidate = trimmed

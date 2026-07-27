@@ -14,6 +14,14 @@ struct Fixture {
 }
 
 impl Fixture {
+    /// Creates a temporary Git repository containing base and head revisions for testing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let fixture = Fixture::new();
+    /// assert_ne!(fixture.base, fixture.head);
+    /// ```
     fn new() -> Self {
         let temp = tempfile::tempdir().expect("temp");
         let root = temp.path().to_path_buf();
@@ -50,6 +58,18 @@ impl Fixture {
         }
     }
 
+    /// Creates a repository handle scoped to the fixture's base and head revisions.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the repository cannot be created from the fixture's worktree.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let fixture = Fixture::new();
+    /// let repository = fixture.repository();
+    /// ```
     fn repository(&self) -> Arc<GitRepository> {
         Arc::new(
             GitRepository::from_worktree(&self.root, &self.base, &self.head).expect("repository"),
@@ -123,6 +143,13 @@ fn tools_are_revision_scoped_bounded_and_reject_traversal() {
     assert_eq!(changed, vec!["src/lib.rs".to_owned()]);
 }
 
+/// Runs a Git command in the specified directory and panics if it fails.
+///
+/// # Examples
+///
+/// ```
+/// git(Path::new("."), &["status"]);
+/// ```
 fn git(path: &Path, args: &[&str]) {
     let output = Command::new("git")
         .arg("-C")
@@ -137,6 +164,33 @@ fn git(path: &Path, args: &[&str]) {
     );
 }
 
+/// Runs a Git command in the specified directory and returns its standard output.
+
+///
+
+/// # Panics
+
+///
+
+/// Panics if Git cannot be executed, exits unsuccessfully, or produces invalid UTF-8.
+
+///
+
+/// # Examples
+
+///
+
+/// ```
+
+/// use std::path::Path;
+
+///
+
+/// let version = output(Path::new("."), &["--version"]);
+
+/// assert!(version.contains("git version"));
+
+/// ```
 fn output(path: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")

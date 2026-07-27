@@ -28,6 +28,27 @@ fn verifier_must_use_a_different_provider_family() {
     assert!(error.to_string().contains("provider families"));
 }
 
+/// Builds review arguments for a repository pull request using the specified GitHub API endpoint.
+
+///
+
+/// # Examples
+
+///
+
+/// ```
+
+/// let review_args = args("http://127.0.0.1:8080");
+
+/// assert_eq!(
+
+///     review_args.github_api_url.as_deref(),
+
+///     Some("http://127.0.0.1:8080")
+
+/// );
+
+/// ```
 fn args(base_url: &str) -> ReviewArgs {
     ReviewArgs {
         repository: Some("octocat/hello".to_owned()),
@@ -47,6 +68,23 @@ fn args(base_url: &str) -> ReviewArgs {
     }
 }
 
+/// Starts a local HTTP server that serves a pull request response followed by a permission response.
+///
+/// # Arguments
+///
+/// * `permission` - The permission value included in the second response.
+///
+/// # Returns
+///
+/// A tuple containing the server's base URL and a handle for joining its serving thread.
+///
+/// # Examples
+///
+/// ```
+/// let (base_url, server) = github_server("read");
+/// assert!(base_url.starts_with("http://"));
+/// server.join().expect("server");
+/// ```
 fn github_server(permission: &'static str) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
     let address = listener.local_addr().expect("address");

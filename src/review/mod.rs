@@ -49,6 +49,21 @@ pub struct ReviewArgs {
     pub dry_run: bool,
 }
 
+/// Runs a pull-request review or interactive PRBot command for the configured event.
+///
+/// Resolves the repository, pull request, invocation, authorization, review configuration,
+/// and execution mode before dispatching the selected command. In dry-run mode, prints the
+/// resolved review metadata and repository manifest without making model calls.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example() -> anyhow::Result<()> {
+/// let args = ReviewArgs::try_parse_from(["prbot", "--dry-run"])?;
+/// run(args).await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn run(args: ReviewArgs) -> Result<()> {
     let repository = required(args.repository.as_deref(), "GITHUB_REPOSITORY")?.to_owned();
     let token = required(args.github_token.as_deref(), "GITHUB_TOKEN")?.to_owned();
@@ -250,6 +265,26 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
     }
 }
 
+/// Builds the review configuration from command-line arguments and validates its model settings.
+///
+/// # Examples
+///
+/// ```
+/// use clap::Parser;
+///
+/// let args = ReviewArgs::parse_from(["prbot"]);
+/// let config = config_from_args(&args).expect("default configuration is valid");
+/// assert!(config.max_concurrency >= 1);
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if the engine is invalid, or if the review and verification
+/// models use the same model ID or provider family.
+///
+/// # Returns
+///
+/// The validated review configuration.
 fn config_from_args(args: &ReviewArgs) -> Result<ReviewConfig> {
     let mut config = ReviewConfig {
         max_review_minutes: args.max_review_minutes,
@@ -285,12 +320,42 @@ fn config_from_args(args: &ReviewArgs) -> Result<ReviewConfig> {
     Ok(config)
 }
 
+/// Extracts a non-blank string from an optional value.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(required(Some("configured"), "setting").unwrap(), "configured");
+/// assert!(required(Some("  "), "setting").is_err());
+/// ```
+///
+/// # Arguments
+///
+/// * `value` - The optional string to validate.
+/// * `name` - The setting name included in the error when the value is missing or blank.
+///
+/// # Returns
+///
+/// The original string when it contains non-whitespace characters.
 fn required<'a>(value: Option<&'a str>, name: &str) -> Result<&'a str> {
     value
         .filter(|value| !value.trim().is_empty())
         .with_context(|| format!("missing required {name}"))
 }
 
+/// Interprets recognized environment variable values as an enabled flag.
+///
+/// # Examples
+///
+/// ```
+/// std::env::set_var("PRBOT_EXAMPLE_FLAG", "yes");
+/// assert!(env_flag("PRBOT_EXAMPLE_FLAG"));
+/// std::env::remove_var("PRBOT_EXAMPLE_FLAG");
+/// ```
+///
+/// # Returns
+///
+/// `true` if the variable is set to `1`, `true`, `TRUE`, `yes`, or `YES`; `false` otherwise.
 fn env_flag(name: &str) -> bool {
     matches!(
         env::var(name).ok().as_deref(),

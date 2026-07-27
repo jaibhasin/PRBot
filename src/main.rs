@@ -26,7 +26,16 @@ enum Commands {
     Version,
 }
 
-#[tokio::main]
+/// Runs the command-line interface and dispatches the selected subcommand.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() {
+/// let command = "prbot version";
+/// assert_eq!(command, "prbot version");
+/// # }
+/// ```
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 

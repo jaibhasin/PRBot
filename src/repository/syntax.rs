@@ -3,6 +3,22 @@ use tree_sitter::{Language, Node, Parser};
 
 const MAX_SYMBOLS_PER_FILE: usize = 24;
 
+/// Collects source symbols using language-aware parsing with lexical fallback.
+///
+/// # Examples
+///
+/// ```
+/// let symbols = symbols_for("main.rs", "fn calculate(value: i32) -> i32 { value }");
+/// assert!(symbols.contains(&"calculate".to_string()));
+/// ```
+///
+/// # Returns
+///
+/// A sorted, de-duplicated collection of up to 24 symbols found in `source`.
+///
+/// `path` identifies the source language used for parsing, and `source` contains
+/// the source code to analyze.
+pub fn symbols_for(path: &str, source: &str) -> Vec<String> {
 pub fn symbols_for(path: &str, source: &str) -> Vec<String> {
     language_for(path)
         .and_then(|language| syntax_symbols(language, source, true))
@@ -11,12 +27,41 @@ pub fn symbols_for(path: &str, source: &str) -> Vec<String> {
         .unwrap_or_else(|| lexical_symbols(source))
 }
 
+/// Extracts definition names from source code using the file's language when supported.
+
+///
+
+/// Falls back to heuristic extraction when the file type is unsupported or parsing fails.
+
+/// The result contains at most 24 sorted, unique names.
+
+///
+
+/// # Examples
+
+///
+
+/// ```
+
+/// let names = definitions_for("main.rs", "fn calculate(value: i32) {}");
+
+/// assert!(names.contains(&"calculate".to_string()));
+
+/// ```
 pub fn definitions_for(path: &str, source: &str) -> Vec<String> {
     language_for(path)
         .and_then(|language| syntax_symbols(language, source, true))
         .unwrap_or_else(|| heuristic_definitions(source))
 }
 
+/// Determines whether a source line appears to define the specified symbol.
+///
+/// # Examples
+///
+/// ```
+/// assert!(looks_like_definition("pub fn calculate(value: i32) {}", "calculate"));
+/// assert!(!looks_like_definition("calculate(value)", "other"));
+/// ```
 pub fn looks_like_definition(line: &str, symbol: &str) -> bool {
     let trimmed = line.trim_start();
     if !trimmed.contains(symbol) {
@@ -46,6 +91,25 @@ pub fn looks_like_definition(line: &str, symbol: &str) -> bool {
         || trimmed.starts_with(&format!("{symbol}:"))
 }
 
+/// Extracts source symbols using the specified Tree-sitter language.
+///
+/// Returns up to 24 sorted symbols, or `None` if the language cannot be configured
+/// or the source cannot be parsed.
+///
+/// # Arguments
+///
+/// * `language` - Tree-sitter language used to parse the source.
+/// * `source` - Source code from which to extract symbols.
+/// * `definitions_only` - Whether to collect only definition names.
+///
+/// # Examples
+///
+/// ```
+/// let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+/// let symbols = syntax_symbols(language, "fn calculate() {}", true).unwrap();
+///
+/// assert_eq!(symbols, vec!["calculate"]);
+/// ```
 fn syntax_symbols(language: Language, source: &str, definitions_only: bool) -> Option<Vec<String>> {
     let mut parser = Parser::new();
     parser.set_language(&language).ok()?;
@@ -60,6 +124,30 @@ fn syntax_symbols(language: Language, source: &str, definitions_only: bool) -> O
     Some(symbols.into_iter().take(MAX_SYMBOLS_PER_FILE).collect())
 }
 
+/// Collects symbol names from a syntax-tree node and its descendants.
+///
+/// Definition names are always collected; identifier-like nodes are collected
+/// only when `definitions_only` is `false`. Collection stops after the
+/// per-file symbol limit is reached.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+/// use tree_sitter::Parser;
+///
+/// let source = b"fn calculate() {}";
+/// let mut parser = Parser::new();
+/// parser
+///     .set_language(&tree_sitter_rust::LANGUAGE.into())
+///     .unwrap();
+/// let tree = parser.parse(source, None).unwrap();
+/// let mut symbols = BTreeSet::new();
+///
+/// collect_symbols(tree.root_node(), source, true, &mut symbols);
+///
+/// assert!(symbols.contains("calculate"));
+/// ```
 fn collect_symbols(
     node: Node<'_>,
     source: &[u8],
@@ -91,6 +179,15 @@ fn collect_symbols(
     }
 }
 
+/// Determines whether a syntax-tree node kind represents a definition or declaration.
+///
+/// # Examples
+///
+/// ```
+/// assert!(is_definition_node("function_definition"));
+/// assert!(is_definition_node("custom_declaration"));
+/// assert!(!is_definition_node("identifier"));
+/// ```
 fn is_definition_node(kind: &str) -> bool {
     matches!(
         kind,
@@ -115,6 +212,17 @@ fn is_definition_node(kind: &str) -> bool {
         || kind.contains("declaration")
 }
 
+/// Finds the first suitable identifier in a syntax-tree node or its descendants.
+///
+/// # Examples
+///
+/// ```no_run
+/// let mut parser = tree_sitter::Parser::new();
+/// parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
+/// let tree = parser.parse("fn calculate() {}", None).unwrap();
+/// let name = definition_name(tree.root_node(), b"fn calculate() {}");
+/// assert_eq!(name.as_deref(), Some("calculate"));
+/// ```
 fn definition_name(node: Node<'_>, source: &[u8]) -> Option<String> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -138,6 +246,17 @@ fn definition_name(node: Node<'_>, source: &[u8]) -> Option<String> {
     None
 }
 
+/// Extracts likely definition names from source lines using common declaration prefixes.
+///
+/// # Examples
+///
+/// ```
+/// let source = "fn calculate() {}\nstruct Widget {}";
+/// assert_eq!(
+///     heuristic_definitions(source),
+///     vec!["Widget".to_owned(), "calculate".to_owned()]
+/// );
+/// ```
 fn heuristic_definitions(source: &str) -> Vec<String> {
     source
         .lines()
@@ -179,6 +298,14 @@ fn heuristic_definitions(source: &str) -> Vec<String> {
         .collect()
 }
 
+/// Collects unique source tokens longer than three characters, sorted and capped per file.
+///
+/// # Examples
+///
+/// ```
+/// let symbols = lexical_symbols("fn calculate_total(value) {}");
+/// assert_eq!(symbols, vec!["calculate".to_owned(), "total".to_owned(), "value".to_owned()]);
+/// ```
 fn lexical_symbols(source: &str) -> Vec<String> {
     source
         .split(|character: char| !character.is_alphanumeric() && character != '_')
@@ -190,6 +317,16 @@ fn lexical_symbols(source: &str) -> Vec<String> {
         .collect()
 }
 
+/// Selects a Tree-sitter language based on a file path's extension.
+///
+/// Supports Rust, Python, Go, JavaScript, TypeScript, and TSX files.
+///
+/// # Examples
+///
+/// ```
+/// assert!(language_for("main.rs").is_some());
+/// assert!(language_for("README.md").is_none());
+/// ```
 fn language_for(path: &str) -> Option<Language> {
     match path.rsplit('.').next()? {
         "rs" => Some(tree_sitter_rust::LANGUAGE.into()),

@@ -20,6 +20,45 @@ pub enum ReviewResult {
     Stale(PullRequest),
 }
 
+/// Runs a pull request review, publishes new findings, and updates the review summary.
+///
+/// Incremental reviews use the previously reviewed commit to select affected bundles and
+/// preserve finding fingerprints across runs. Returns `ReviewResult::Stale` when the pull
+/// request changes while the review is running.
+///
+/// # Examples
+///
+/// ```ignore
+/// let result = run_review(
+///     &github,
+///     api_key,
+///     repository_name,
+///     pr_number,
+///     &pull_request,
+///     repository,
+///     &manifest,
+///     pr_context,
+///     &comments,
+///     command_id,
+///     &config,
+///     budget,
+/// ).await?;
+///
+/// assert!(matches!(result, ReviewResult::Complete | ReviewResult::Stale(_)));
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+///
+/// # Parameters
+///
+/// - `comments` contains existing issue comments used to restore review state.
+/// - `command_id` identifies the command that requested the review, when applicable.
+/// - `config` controls the review engine, concurrency, models, and comment limit.
+/// - `budget` tracks the review's shared resource usage.
+///
+/// # Returns
+///
+/// The completed review result, or the current pull request when its head commit changed
+/// before findings were published.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_review(
     github: &GitHubClient,
@@ -211,6 +250,16 @@ pub async fn run_review(
     Ok(ReviewResult::Complete)
 }
 
+/// Converts a resolved finding into a GitHub review comment, using a file-level
+/// comment when the finding cannot be anchored to a line.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let comment = review_comment(&finding);
+/// assert_eq!(comment.path, finding.candidate.path);
+/// assert_eq!(comment.body, finding_body(&finding));
+/// ```
 fn review_comment(finding: &crate::types::ResolvedFinding) -> ReviewInputComment {
     if finding.file_level || finding.line.is_none() {
         return ReviewInputComment {
@@ -239,6 +288,18 @@ fn review_comment(finding: &crate::types::ResolvedFinding) -> ReviewInputComment
     }
 }
 
+/// Extracts the finding fingerprint from a PRBot finding marker.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(
+///     finding_marker("Issue details <!-- prbot:finding:abc123 -->"),
+///     Some("abc123".to_owned())
+/// );
+/// assert_eq!(finding_marker("Issue details"), None);
+/// ```
+fn finding_marker(body: &str) -> Option<String>
 fn finding_marker(body: &str) -> Option<String> {
     let prefix = "<!-- prbot:finding:";
     let start = body.find(prefix)? + prefix.len();

@@ -21,6 +21,16 @@ struct BudgetState {
 }
 
 impl Budget {
+    /// Creates a budget with time, input-token, and estimated-cost limits.
+    ///
+    /// The time limit is set to at least one minute.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let budget = Budget::new(1, 10_000, 1.0);
+    /// assert!(budget.remaining_time().is_ok());
+    /// ```
     pub fn new(max_minutes: u64, max_input_tokens: u64, max_cost_usd: f64) -> Self {
         Self {
             started: Instant::now(),
@@ -31,6 +41,24 @@ impl Budget {
         }
     }
 
+    /// Reserves resources for a planned operation against the available budgets.
+    ///
+    /// # Arguments
+    ///
+    /// * `input_tokens` - Number of input tokens to reserve.
+    /// * `max_output_tokens` - Maximum number of output tokens expected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the time budget is exhausted, or if the reservation exceeds the input-token or estimated-cost budget.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # async fn example(budget: &Budget) {
+    /// budget.reserve(1_000, 2_000).await.unwrap();
+    /// # }
+    /// ```
     pub(super) async fn reserve(&self, input_tokens: u64, max_output_tokens: u64) -> Result<()> {
         self.remaining_time()?;
         let estimated_cost =
@@ -47,6 +75,23 @@ impl Budget {
         Ok(())
     }
 
+    /// Records completion-token usage and any reported cost in the budget.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # async fn example() {
+    /// let budget = Budget::new(1, 10_000, 1.0);
+    /// let usage = Usage {
+    ///     _prompt_tokens: 0,
+    ///     completion_tokens: 100,
+    ///     cost: Some(0.02),
+    /// };
+    ///
+    /// budget.record_usage(&usage).await;
+    /// assert_eq!(budget.snapshot().await.output_tokens, 100);
+    /// # }
+    /// ```
     pub(super) async fn record_usage(&self, usage: &Usage) {
         let mut state = self.state.lock().await;
         state.output_tokens += usage.completion_tokens;
@@ -56,6 +101,18 @@ impl Budget {
         }
     }
 
+    /// Determines the duration remaining in the budget.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let budget = Budget::new(1, 1_000, 1.0);
+    /// assert!(budget.remaining_time().is_ok());
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the time budget has been exhausted.
     pub fn remaining_time(&self) -> Result<Duration> {
         self.deadline
             .checked_sub(self.started.elapsed())
@@ -63,6 +120,20 @@ impl Budget {
             .context("review time budget exhausted")
     }
 
+    /// Captures the current token usage, estimated cost, and elapsed time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let runtime = tokio::runtime::Runtime::new().unwrap();
+    /// runtime.block_on(async {
+    ///     let budget = Budget::new(1, 10_000, 1.0);
+    ///     let snapshot = budget.snapshot().await;
+    ///
+    ///     assert_eq!(snapshot.input_tokens, 0);
+    ///     assert_eq!(snapshot.output_tokens, 0);
+    /// });
+    /// ```
     pub async fn snapshot(&self) -> BudgetSnapshot {
         let state = self.state.lock().await;
         BudgetSnapshot {

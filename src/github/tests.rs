@@ -145,6 +145,16 @@ async fn treats_non_collaborator_not_found_as_unauthorized() {
     server.join().expect("server");
 }
 
+/// Builds an HTTP 200 response with a JSON body and an optional pagination link.
+///
+/// # Examples
+///
+/// ```
+/// let response = response(r#"{"ok":true}"#, None);
+/// assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+/// assert!(response.ends_with(r#"{"ok":true}"#));
+/// ```
+fn response(body: &str, link: Option<&str>) -> String
 fn response(body: &str, link: Option<&str>) -> String {
     let link = link
         .map(|value| format!("Link: {value}\r\n"))
@@ -155,6 +165,31 @@ fn response(body: &str, link: Option<&str>) -> String {
     )
 }
 
+/// Reads a complete HTTP request from a TCP stream, including the body specified by its `Content-Length` header.
+///
+/// # Examples
+///
+/// ```
+/// use std::io::Write;
+/// use std::net::{TcpListener, TcpStream};
+/// use std::thread;
+///
+/// let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+/// let address = listener.local_addr().unwrap();
+///
+/// let server = thread::spawn(move || {
+///     let (mut stream, _) = listener.accept().unwrap();
+///     stream
+///         .write_all(b"POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello")
+///         .unwrap();
+/// });
+///
+/// let mut stream = TcpStream::connect(address).unwrap();
+/// let request = read_request(&mut stream);
+///
+/// assert!(request.ends_with("hello"));
+/// server.join().unwrap();
+/// ```
 fn read_request(stream: &mut TcpStream) -> String {
     let mut bytes = Vec::new();
     let mut buffer = [0_u8; 4096];

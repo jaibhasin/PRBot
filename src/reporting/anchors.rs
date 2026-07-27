@@ -2,6 +2,19 @@ use crate::types::{CandidateFinding, ChangedFile, DiffLine, DiffSide, ResolvedFi
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
+/// Resolves candidate findings against changed files and counts candidates that could not be resolved.
+///
+/// # Examples
+///
+/// ```
+/// let (resolved, skipped) = resolve_findings(vec![], &[]);
+/// assert!(resolved.is_empty());
+/// assert_eq!(skipped, 0);
+/// ```
+///
+/// # Returns
+///
+/// A tuple containing the resolved findings and the number of skipped candidates.
 pub fn resolve_findings(
     candidates: Vec<CandidateFinding>,
     files: &[ChangedFile],
@@ -15,6 +28,16 @@ pub fn resolve_findings(
     (resolved, skipped)
 }
 
+/// Removes findings whose fingerprints have already been seen, including duplicates within the input.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+///
+/// let findings = deduplicate(Vec::<ResolvedFinding>::new(), &BTreeSet::<String>::new());
+/// assert!(findings.is_empty());
+/// ```
 pub fn deduplicate(
     findings: Vec<ResolvedFinding>,
     previous: &BTreeSet<String>,
@@ -26,6 +49,17 @@ pub fn deduplicate(
         .collect()
 }
 
+/// Resolves a candidate finding against the changed files and determines its review location.
+///
+/// Unique anchor matches produce a line-level finding; missing or ambiguous anchors produce a
+/// file-level finding. Returns `None` when the candidate does not correspond to a changed file.
+///
+/// # Examples
+///
+/// ```no_run
+/// let resolved = resolve_finding(candidate, &files);
+/// assert!(resolved.is_some());
+/// ```
 fn resolve_finding(candidate: CandidateFinding, files: &[ChangedFile]) -> Option<ResolvedFinding> {
     let file = files.iter().find(|file| {
         file.path == candidate.path || file.old_path.as_deref() == Some(candidate.path.as_str())
@@ -84,6 +118,25 @@ fn resolve_finding(candidate: CandidateFinding, files: &[ChangedFile]) -> Option
     })
 }
 
+/// Determines whether an anchor matches consecutive diff lines at a given position and side.
+///
+/// # Examples
+///
+/// ```
+/// let lines = vec![DiffLine {
+///     content: "let value = 1;".into(),
+///     side: DiffSide::Right,
+///     old_line: None,
+///     new_line: Some(1),
+/// }];
+///
+/// assert!(matches_anchor(
+///     &lines,
+///     0,
+///     &["let value = 1;"],
+///     DiffSide::Right,
+/// ));
+/// ```
 fn matches_anchor(lines: &[DiffLine], start: usize, anchor: &[&str], side: DiffSide) -> bool {
     if start + anchor.len() > lines.len() {
         return false;
@@ -94,6 +147,14 @@ fn matches_anchor(lines: &[DiffLine], start: usize, anchor: &[&str], side: DiffS
         .all(|(line, expected)| line.content == *expected && side_matches(line.side, side))
 }
 
+/// Finds the first line at or after `start` whose content and diff side match the requested values.
+///
+/// # Examples
+///
+/// ```
+/// let lines: &[DiffLine] = &[];
+/// assert_eq!(find_end(lines, 0, "end", DiffSide::Right), None);
+/// ```
 fn find_end(lines: &[DiffLine], start: usize, end_anchor: &str, side: DiffSide) -> Option<usize> {
     lines
         .iter()
@@ -103,10 +164,36 @@ fn find_end(lines: &[DiffLine], start: usize, end_anchor: &str, side: DiffSide) 
         .map(|(index, _)| index)
 }
 
+/// Determines whether a diff line belongs to the requested side.
+///
+/// Context lines match either requested side.
+///
+/// # Examples
+///
+/// ```
+/// assert!(side_matches(DiffSide::Right, DiffSide::Right));
+/// assert!(side_matches(DiffSide::Context, DiffSide::Left));
+/// assert!(!side_matches(DiffSide::Left, DiffSide::Right));
+/// ```
+///
+/// `true` if the line side matches the requested side or is context, `false` otherwise.
 fn side_matches(line_side: DiffSide, requested: DiffSide) -> bool {
     line_side == requested || line_side == DiffSide::Context
 }
 
+/// Gets the line number associated with the requested diff side.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let line_number = side_line(&line, DiffSide::Right);
+/// assert_eq!(line_number, line.new_line);
+/// ```
+///
+/// # Returns
+///
+/// The old-file line number for the left side, or the new-file line number for
+/// the right and context sides.
 fn side_line(line: &DiffLine, side: DiffSide) -> Option<u64> {
     match side {
         DiffSide::Left => line.old_line,
@@ -114,6 +201,17 @@ fn side_line(line: &DiffLine, side: DiffSide) -> Option<u64> {
     }
 }
 
+/// Generates a stable SHA-256 fingerprint for a candidate finding.
+///
+/// The fingerprint incorporates the path, category, priority, normalized anchor text,
+/// and normalized title.
+///
+/// # Examples
+///
+/// ```ignore
+/// let fingerprint = fingerprint(&candidate);
+/// assert!(!fingerprint.is_empty());
+/// ```
 fn fingerprint(candidate: &CandidateFinding) -> String {
     let normalized = format!(
         "{}\n{:?}\n{:?}\n{}\n{}",

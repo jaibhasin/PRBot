@@ -25,6 +25,23 @@ pub struct LlmClient {
 }
 
 impl LlmClient {
+    /// Creates an OpenRouter client with the specified credentials, endpoint, budget, and concurrency limit.
+    ///
+    /// A missing endpoint uses the default OpenRouter URL. A concurrency value of zero is treated as one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// let client = LlmClient::new(
+    ///     "api-key",
+    ///     None,
+    ///     Arc::new(Budget::new(1, 10_000, 10.0)),
+    ///     2,
+    /// )
+    /// .unwrap();
+    /// ```
     pub fn new(
         api_key: impl Into<String>,
         endpoint: Option<String>,
@@ -44,6 +61,41 @@ impl LlmClient {
         })
     }
 
+    /// Runs a bounded tool-using conversation and returns the model's final content.
+    ///
+    /// Tool execution errors are added to the conversation as tool results so the model
+    /// can continue. An error is returned if the model provides no choices or usable
+    /// final content, or if `max_steps` is exceeded.
+    ///
+    /// # Arguments
+    ///
+    /// * `tools` — Tool definitions supplied to the model.
+    /// * `max_steps` — Maximum number of model and tool-execution iterations.
+    /// * `execute_tool` — Callback that executes a tool by name with its arguments.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # async fn example(client: &LlmClient) -> anyhow::Result<()> {
+    /// let result = client
+    ///     .run_agent(
+    ///         "model",
+    ///         "You are helpful.",
+    ///         "Say hello.",
+    ///         Vec::new(),
+    ///         3,
+    ///         |_name, _arguments| async { Ok::<_, anyhow::Error>("done".to_owned()) },
+    ///     )
+    ///     .await?;
+    ///
+    /// assert_eq!(result, "Hello!");
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// The model's non-empty final response content.
     pub async fn run_agent<F, Fut>(
         &self,
         model: &str,
@@ -90,6 +142,31 @@ impl LlmClient {
         bail!("model exceeded the maximum repository tool steps")
     }
 
+    /// Sends a chat completion request and records any reported usage against the shared budget.
+    ///
+    /// # Arguments
+    ///
+    /// * `model` - The model identifier to request.
+    /// * `messages` - The conversation messages to send.
+    /// * `tools` - The tool definitions available to the model.
+    ///
+    /// # Returns
+    ///
+    /// The parsed chat completion response.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(client: &LlmClient) -> anyhow::Result<()> {
+    /// let messages = vec![serde_json::json!({
+    ///     "role": "user",
+    ///     "content": "Hello",
+    /// })];
+    /// let response = client.completion("model-name", &messages, &[]).await?;
+    /// assert!(!response.choices.is_empty());
+    /// # Ok(())
+    /// # }
+    /// ```
     async fn completion(
         &self,
         model: &str,
@@ -160,6 +237,18 @@ struct ChatCompletionRequest<'a> {
     temperature: f32,
 }
 
+/// Determines whether a slice contains no elements.
+///
+/// # Examples
+///
+/// ```
+/// assert!(slice_empty(&&[][..]));
+/// assert!(!slice_empty(&&[1, 2][..]));
+/// ```
+///
+/// # Returns
+///
+/// `true` if the slice is empty, `false` otherwise.
 fn slice_empty<T>(value: &&[T]) -> bool {
     value.is_empty()
 }
@@ -199,6 +288,18 @@ struct ToolFunction {
     arguments: String,
 }
 
+/// Estimates the number of tokens represented by a string.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(estimate_tokens("hello"), 2);
+/// assert_eq!(estimate_tokens(""), 0);
+/// ```
+///
+/// # Returns
+///
+/// An approximate token count based on the string's Unicode scalar value count.
 fn estimate_tokens(value: &str) -> u64 {
     (value.chars().count() as u64).div_ceil(4)
 }

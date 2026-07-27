@@ -40,6 +40,14 @@ pub enum Command {
 }
 
 impl Command {
+    /// Returns the lowercase name of the command variant.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let command = Command::Review;
+    /// assert_eq!(command.name(), "review");
+    /// ```
     pub fn name(&self) -> &str {
         match self {
             Self::Review => "review",
@@ -59,6 +67,17 @@ pub enum Invocation {
     Ignored(&'static str),
 }
 
+/// Resolves how a GitHub event should be handled.
+///
+/// Events without a comment are handled automatically. Valid user comments
+/// produce a command invocation, while non-created comments, bot comments, and
+/// comments without a `/prbot` command are ignored.
+///
+/// # Examples
+///
+/// ```
+/// assert!(matches!(resolve_invocation(None), Invocation::Automatic));
+/// ```
 pub fn resolve_invocation(event: Option<&EventPayload>) -> Invocation {
     let Some(event) = event else {
         return Invocation::Automatic;
@@ -82,6 +101,28 @@ pub fn resolve_invocation(event: Option<&EventPayload>) -> Invocation {
     }
 }
 
+/// Resolves a pull request number from an explicit value or GitHub event payload.
+///
+/// An explicit non-empty value takes precedence over the event payload. If no
+/// number can be resolved, an error is returned.
+///
+/// # Arguments
+///
+/// * `explicit` - Optional pull request number supplied directly.
+/// * `event` - Optional GitHub event payload used as a fallback.
+///
+/// # Examples
+///
+/// ```
+/// let number = resolve_pr_number(Some("42"), None).unwrap();
+/// assert_eq!(number, 42);
+/// ```
+///
+/// # Errors
+///
+/// Returns an error when the explicit value is invalid, no event is available,
+/// or the event does not contain a pull request number.
+pub fn resolve_pr_number(explicit: Option<&str>, event: Option<&EventPayload>) -> Result<u64> {
 pub fn resolve_pr_number(explicit: Option<&str>, event: Option<&EventPayload>) -> Result<u64> {
     if let Some(raw) = explicit.filter(|value| !value.trim().is_empty()) {
         return raw
@@ -106,6 +147,20 @@ pub fn resolve_pr_number(explicit: Option<&str>, event: Option<&EventPayload>) -
     bail!("could not determine pull request number from event payload")
 }
 
+/// Reads and parses the GitHub Actions event payload when an event file is configured.
+///
+/// Returns `None` when `GITHUB_EVENT_PATH` is unset. Reading or parsing a configured
+/// event file produces an error.
+///
+/// # Examples
+///
+/// ```
+/// let payload = read_event_payload()?;
+/// if let Some(event) = payload {
+///     println!("Event action: {:?}", event.action);
+/// }
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn read_event_payload() -> Result<Option<EventPayload>> {
     let Some(path) = env::var_os("GITHUB_EVENT_PATH").map(PathBuf::from) else {
         return Ok(None);
@@ -117,6 +172,23 @@ pub fn read_event_payload() -> Result<Option<EventPayload>> {
     ))
 }
 
+/// Parses a `/prbot` command from a comment body.
+///
+/// Supports `review`, `ask <question>`, and `explain <target>` commands.
+/// The command name is case-insensitive, and surrounding whitespace is ignored.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(parse_command("/prbot review"), Some(Command::Review));
+/// assert_eq!(
+///     parse_command("/prbot ask Why did this change?"),
+///     Some(Command::Ask("Why did this change?".to_owned()))
+/// );
+/// ```
+///
+/// Returns `Some` with the parsed command, or `None` when the body does not
+/// contain a valid `/prbot` command.
 fn parse_command(body: &str) -> Option<Command> {
     let trimmed = body.trim();
     let mut parts = trimmed.splitn(3, char::is_whitespace);

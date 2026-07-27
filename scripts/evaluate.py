@@ -9,6 +9,12 @@ from pathlib import Path
 
 
 def parse_args():
+    """
+    Parse command-line arguments for the evaluation tool.
+    
+    Returns:
+        argparse.Namespace: Parsed results file path and small-sample gate option.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("results", type=Path)
     parser.add_argument("--allow-small-sample", action="store_true")
@@ -16,6 +22,18 @@ def parse_args():
 
 
 def load_results(path):
+    """
+    Load review result objects from a JSON Lines file.
+    
+    Parameters:
+    	path (Path): Path to the input file. Blank lines and lines beginning with `#` are ignored.
+    
+    Returns:
+    	list: Parsed JSON objects from the file.
+    
+    Raises:
+    	ValueError: If a non-comment, non-empty line contains invalid JSON.
+    """
     cases = []
     with path.open(encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, 1):
@@ -29,10 +47,29 @@ def load_results(path):
 
 
 def safe_ratio(numerator, denominator):
+    """
+    Calculate a ratio, using 1.0 when the denominator is zero.
+    
+    Parameters:
+        numerator: The value to divide.
+        denominator: The divisor.
+    
+    Returns:
+        The quotient, or 1.0 when the denominator is zero.
+    """
     return numerator / denominator if denominator else 1.0
 
 
 def score(cases):
+    """
+    Compute aggregate review-quality metrics from case results.
+    
+    Parameters:
+    	cases (iterable): Case results containing expected and published findings, hunks, and model-call data.
+    
+    Returns:
+    	dict: Metrics including precision, critical recall, anchor accuracy, coverage, duplicate rate, unauthorized model-call count, and partial false-clean count.
+    """
     published = [finding for case in cases for finding in case["published_findings"]]
     actionable = sum(bool(finding["actionable"]) for finding in published)
     anchor_valid = sum(bool(finding["anchor_valid"]) for finding in published)
@@ -76,6 +113,16 @@ def score(cases):
 
 
 def passes_gate(metrics, allow_small_sample):
+    """
+    Determine whether aggregate review metrics satisfy the release gate.
+    
+    Parameters:
+        metrics (dict): Aggregate metrics to evaluate against the release thresholds.
+        allow_small_sample (bool): Whether to bypass the minimum requirement of 50 cases.
+    
+    Returns:
+        bool: `true` if all release-gate conditions are satisfied, `false` otherwise.
+    """
     return all(
         [
             allow_small_sample or metrics["cases"] >= 50,
@@ -91,6 +138,12 @@ def passes_gate(metrics, allow_small_sample):
 
 
 def main():
+    """
+    Run the evaluation command and report whether the results pass the release gate.
+    
+    Returns:
+    	int: Exit status: `0` if the gate passes, `1` if it fails, or `2` if the results file cannot be loaded or parsed.
+    """
     args = parse_args()
     try:
         cases = load_results(args.results)

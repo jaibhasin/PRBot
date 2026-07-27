@@ -4,6 +4,27 @@ use crate::llm::LlmClient;
 use crate::types::{CandidateFinding, ReviewManifest};
 use serde::Deserialize;
 
+/// Reviews the changes in a manifest using the legacy precision-first workflow.
+///
+/// Failed agent calls or response parsing produce an empty result with
+/// `"legacy-review"` listed in `failed_bundles`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example(
+/// #     client: &LlmClient,
+/// #     manifest: &ReviewManifest,
+/// #     config: &ReviewConfig,
+/// # ) {
+/// let result = review(client, manifest, config).await;
+/// # }
+/// ```
+///
+/// # Returns
+///
+/// An [`AgentReviewResult`] containing the parsed findings, or an error result
+/// when the review cannot be completed.
 pub async fn review(
     client: &LlmClient,
     manifest: &ReviewManifest,

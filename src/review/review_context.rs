@@ -11,6 +11,71 @@ pub struct PreparedSnapshot {
     pub pr_context: String,
 }
 
+/// Prepares the repository, review manifest, and rendered pull request context.
+
+///
+
+/// When enabled, trusted repository configuration and instructions are merged into
+
+/// `config`. The configuration is updated with any trusted settings loaded during
+
+/// preparation.
+
+///
+
+/// # Examples
+
+///
+
+/// ```no_run
+
+/// # async fn example(
+
+/// #     github: &GitHubClient,
+
+/// #     pull_request: &PullRequest,
+
+/// #     config: &mut ReviewConfig,
+
+/// # ) -> anyhow::Result<()> {
+
+/// let snapshot = prepare_snapshot(
+
+///     github,
+
+///     "owner/repository",
+
+///     "token",
+
+///     pull_request.number,
+
+///     pull_request,
+
+///     config,
+
+///     true,
+
+/// ).await?;
+
+///
+
+/// println!("{}", snapshot.pr_context);
+
+/// # Ok(())
+
+/// # }
+
+/// ```
+
+///
+
+/// # Errors
+
+///
+
+/// Returns an error if fetching the repository or building its review context
+
+/// fails.
 pub async fn prepare_snapshot(
     github: &GitHubClient,
     repository_name: &str,
@@ -61,6 +126,26 @@ pub async fn prepare_snapshot(
     })
 }
 
+/// Loads trusted repository configuration and instructions into the review configuration.
+///
+/// Reads `base/.prbot.toml` and applicable `AGENTS.md` files, adding global instructions
+/// and directory-specific path rules to `config`.
+///
+/// # Errors
+///
+/// Returns an error if a configuration file cannot be parsed, the repository tree cannot
+/// be listed, or an instruction file cannot be read.
+///
+/// # Examples
+///
+/// ```no_run
+/// let mut config = ReviewConfig::default();
+/// apply_trusted_repository_config(&repository, &mut config)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// `repository` provides the trusted configuration files to load.
+/// `config` receives the loaded configuration and instructions.
 pub fn apply_trusted_repository_config(
     repository: &GitRepository,
     config: &mut ReviewConfig,
@@ -93,6 +178,21 @@ pub fn apply_trusted_repository_config(
     Ok(())
 }
 
+/// Finds the first issue reference in a pull request body and retrieves the corresponding issue.
+///
+/// Issue references use the `#number` format. The pull request's own number is ignored,
+/// and `None` is returned when no reference is found or the issue cannot be retrieved.
+///
+/// # Examples
+///
+/// ```ignore
+/// let issue = fetch_linked_issue(github, pull_request).await;
+/// assert!(issue.is_some());
+/// ```
+pub async fn fetch_linked_issue(
+github: &GitHubClient,
+pull_request: &PullRequest,
+) -> Option<Issue>
 pub async fn fetch_linked_issue(
     github: &GitHubClient,
     pull_request: &PullRequest,
@@ -109,6 +209,17 @@ pub async fn fetch_linked_issue(
     github.get_issue(number).await.ok()
 }
 
+/// Formats pull request details, existing checks, a linked issue, and trusted instructions into review context.
+///
+/// Descriptions and issue bodies are limited to 10,000 characters, trusted instructions to 50,000
+/// characters, and existing checks to 50 entries.
+///
+/// # Examples
+///
+/// ```ignore
+/// let context = render_pr_context(&pull_request, &checks, linked_issue.as_ref(), &config);
+/// assert!(context.starts_with("PR #"));
+/// ```
 pub fn render_pr_context(
     pull_request: &PullRequest,
     checks: &[CheckRun],
@@ -161,6 +272,25 @@ pub fn render_pr_context(
     )
 }
 
+/// Limits a string to a specified number of characters.
+
+///
+
+/// # Examples
+
+///
+
+/// ```
+
+/// assert_eq!(truncate("Hello, world!", 5), "Hello");
+
+/// assert_eq!(truncate("こんにちは", 3), "こんに");
+
+/// ```
+
+///
+
+/// The limit is applied by Unicode scalar values rather than bytes.
 fn truncate(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }

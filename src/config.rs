@@ -23,6 +23,16 @@ pub struct ReviewConfig {
 }
 
 impl Default for ReviewConfig {
+    /// Creates a review configuration with the default models, limits, filters, and review policies.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let config = ReviewConfig::default();
+    /// assert_eq!(config.max_comments, 12);
+    /// assert!(config.auto_review_owner_authored);
+    /// ```
+    fn default() -> Self
     fn default() -> Self {
         Self {
             review_model: DEFAULT_REVIEW_MODEL.to_owned(),
@@ -49,6 +59,21 @@ pub enum ReviewEngine {
 }
 
 impl ReviewEngine {
+    /// Parses a review engine name.
+    ///
+    /// Input is trimmed and matched case-insensitively against `contextual` and
+    /// `legacy`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert!(matches!(ReviewEngine::parse(" Contextual "), Ok(ReviewEngine::Contextual)));
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the value is not `contextual` or `legacy`.
+    pub fn parse(value: &str) -> Result<Self>
     pub fn parse(value: &str) -> Result<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "contextual" => Ok(Self::Contextual),
@@ -83,6 +108,25 @@ struct RepositoryReviewConfig {
 }
 
 impl ReviewConfig {
+    /// Applies trusted repository review settings from TOML.
+    ///
+    /// Repository settings may update review policies, path filters, instructions, comment limits,
+    /// and path-specific rules. The configured comment limit can only be reduced.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the TOML is invalid, an auto-review policy is unsupported, or any
+    /// configured glob is invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut config = ReviewConfig::default();
+    /// config
+    ///     .apply_repository_toml("[review]\nmax_comments = 5")
+    ///     .unwrap();
+    /// assert_eq!(config.max_comments, 5);
+    /// ```
     pub fn apply_repository_toml(&mut self, source: &str) -> Result<()> {
         let parsed: RepositoryConfig =
             toml::from_str(source).context("failed to parse trusted .prbot.toml")?;
@@ -114,6 +158,18 @@ impl ReviewConfig {
         Ok(())
     }
 
+    /// Builds a path filter from the configured include and exclude patterns.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let config = ReviewConfig::default();
+    /// let filter = config.path_filter().unwrap();
+    ///
+    /// assert!(filter.is_reviewable("src/main.rs"));
+    /// ```
+    ///
+    /// Returns an error if any configured glob pattern is invalid.
     pub fn path_filter(&self) -> Result<PathFilter> {
         Ok(PathFilter {
             include: build_globset(&self.include)?,
@@ -121,6 +177,17 @@ impl ReviewConfig {
         })
     }
 
+    /// Collects the base instructions and instructions from rules matching a path.
+    ///
+    /// Invalid path-rule globs are ignored.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let config = ReviewConfig::default();
+    /// assert!(config.instructions_for("src/main.rs").is_empty());
+    /// ```
+    ///
     pub fn instructions_for(&self, path: &str) -> Vec<String> {
         let mut result = self.instructions.clone();
         for rule in &self.path_rules {
@@ -142,11 +209,45 @@ pub struct PathFilter {
 }
 
 impl PathFilter {
+    /// Determines whether a path is eligible for review.
+    ///
+    /// A path is eligible when it matches the include patterns, does not match the
+    /// exclude patterns, and uses a supported file extension.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the path is eligible for review, `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let filter = ReviewConfig::default().path_filter().unwrap();
+    ///
+    /// assert!(filter.is_reviewable("src/main.rs"));
+    /// assert!(!filter.is_reviewable("assets/logo.png"));
+    /// ```
     pub fn is_reviewable(&self, path: &str) -> bool {
         self.include.is_match(path) && !self.exclude.is_match(path) && supported_file(path)
     }
 }
 
+/// Compiles glob patterns into a matcher.
+///
+/// # Errors
+///
+/// Returns an error if any pattern is invalid or the matcher cannot be built.
+///
+/// # Examples
+///
+/// ```
+/// let globs = build_globset(&["src/**/*.rs".to_string()])?;
+/// assert!(globs.is_match("src/main.rs"));
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+///
+/// # Returns
+///
+/// The compiled glob matcher.
 fn build_globset(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
@@ -157,10 +258,31 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
         .context("failed to compile glob configuration")
 }
 
+/// Validates a collection of glob patterns.
+///
+/// # Examples
+///
+/// ```
+/// let patterns = vec!["src/**/*.rs".to_string()];
+/// assert!(validate_globs(&patterns).is_ok());
+/// ```
+fn validate_globs(patterns: &[String]) -> Result<()> {
 fn validate_globs(patterns: &[String]) -> Result<()> {
     build_globset(patterns).map(|_| ())
 }
 
+/// Determines whether a path has a supported source or configuration file extension.
+///
+/// # Examples
+///
+/// ```
+/// assert!(supported_file("src/main.rs"));
+/// assert!(!supported_file("assets/logo.png"));
+/// ```
+///
+/// # Returns
+///
+/// `true` if the path ends with a supported extension, `false` otherwise.
 fn supported_file(path: &str) -> bool {
     let extension = path.rsplit('.').next().unwrap_or_default();
     matches!(
@@ -196,6 +318,15 @@ fn supported_file(path: &str) -> bool {
     )
 }
 
+/// Provides glob patterns for commonly excluded paths and generated files.
+///
+/// # Examples
+///
+/// ```
+/// let excludes = default_excludes();
+/// assert!(excludes.contains(&"**/vendor/**".to_owned()));
+/// assert!(excludes.contains(&"**/*.lock".to_owned()));
+/// ```
 fn default_excludes() -> Vec<String> {
     [
         "**/vendor/**",

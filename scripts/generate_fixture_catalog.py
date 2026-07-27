@@ -29,6 +29,9 @@ KINDS = [
 
 
 def main() -> None:
+    """
+    Generate and write the held-out fixture catalog skeleton as JSONL.
+    """
     OUT.parent.mkdir(parents=True, exist_ok=True)
     rows = []
     case_id = 1

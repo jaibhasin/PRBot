@@ -5,6 +5,23 @@ use crate::types::{
 };
 use anyhow::{Context, Result};
 
+/// Builds a review manifest from the changes between the repository's base and head revisions.
+///
+/// Files that are not reviewable or have no textual diff hunks are recorded as ignored.
+///
+/// # Errors
+///
+/// Returns an error if Git operations fail or the changed-file metadata cannot be parsed.
+///
+/// # Examples
+///
+/// ```no_run
+/// let manifest = build_manifest(&repository, &filter)?;
+/// assert!(manifest.files.iter().all(|file| !file.hunks.is_empty()));
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+///
+/// `repository` supplies the revision range and file patches; `filter` determines which paths are reviewable.
 pub fn build_manifest(repository: &GitRepository, filter: &PathFilter) -> Result<ReviewManifest> {
     let names = repository.output_args(
         &[
@@ -46,6 +63,25 @@ pub fn build_manifest(repository: &GitRepository, filter: &PathFilter) -> Result
     Ok(manifest)
 }
 
+/// Parses NUL-delimited Git name-status output into file change entries.
+///
+/// Rename and copy entries include both their original and current paths.
+///
+/// # Errors
+///
+/// Returns an error when a changed file lacks a path or a rename/copy entry
+/// lacks either its original or current path.
+///
+/// # Examples
+///
+/// ```
+/// # use anyhow::Result;
+/// # fn example() -> Result<()> {
+/// let entries = parse_name_status_output("M\\0src/lib.rs\\0")?;
+/// assert_eq!(entries.len(), 1);
+/// # Ok(())
+/// # }
+/// ```
 fn parse_name_status_output(output: &str) -> Result<Vec<(FileStatus, Option<String>, String)>> {
     let mut fields = output.split('\0').filter(|field| !field.is_empty());
     let mut result = Vec::new();
@@ -63,6 +99,16 @@ fn parse_name_status_output(output: &str) -> Result<Vec<(FileStatus, Option<Stri
     Ok(result)
 }
 
+/// Converts a Git name-status code into its corresponding file status.
+///
+/// Unknown or empty codes are mapped to [`FileStatus::Unknown`].
+///
+/// # Examples
+///
+/// ```
+/// assert!(matches!(status_from_code("M"), FileStatus::Modified));
+/// assert!(matches!(status_from_code(""), FileStatus::Unknown));
+/// ```
 fn status_from_code(raw_status: &str) -> FileStatus {
     match raw_status.chars().next().unwrap_or('?') {
         'A' => FileStatus::Added,
@@ -74,6 +120,21 @@ fn status_from_code(raw_status: &str) -> FileStatus {
     }
 }
 
+/// Parses unified diff text into hunks and their individual line changes.
+///
+/// Lines before the first hunk header and no-newline markers are ignored. Invalid
+/// hunk headers use zero-based starting positions.
+///
+/// # Examples
+///
+/// ```
+/// let hunks = parse_patch("@@ -1 +1 @@\n-old\n+new");
+///
+/// assert_eq!(hunks.len(), 1);
+/// assert_eq!(hunks[0].lines.len(), 2);
+/// assert_eq!(hunks[0].lines[0].content, "old");
+/// assert_eq!(hunks[0].lines[1].content, "new");
+/// ```
 pub fn parse_patch(patch: &str) -> Vec<DiffHunk> {
     let mut hunks = Vec::new();
     let mut current: Option<DiffHunk> = None;
@@ -131,6 +192,16 @@ pub fn parse_patch(patch: &str) -> Vec<DiffHunk> {
     hunks
 }
 
+/// Extracts the starting old and new line numbers from a unified-diff hunk header.
+///
+/// Returns `None` when the header does not contain valid old and new ranges.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(parse_hunk_header("@@ -10,2 +12,3 @@"), Some((10, 12)));
+/// assert_eq!(parse_hunk_header("invalid"), None);
+/// ```
 fn parse_hunk_header(header: &str) -> Option<(u64, u64)> {
     let mut parts = header.split_whitespace();
     parts.next()?;
@@ -139,6 +210,24 @@ fn parse_hunk_header(header: &str) -> Option<(u64, u64)> {
     Some((parse_start(old)?, parse_start(new)?))
 }
 
+/// Extracts the starting line number from a diff range.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(parse_start("12,5"), Some(12));
+/// assert_eq!(parse_start("7"), Some(7));
+/// ```
+///
+/// # Returns
+///
+/// The parsed starting line number, or `None` if the range is invalid.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(parse_start("invalid"), None);
+/// ```
 fn parse_start(value: &str) -> Option<u64> {
     value.split(',').next()?.parse().ok()
 }

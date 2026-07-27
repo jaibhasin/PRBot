@@ -15,6 +15,30 @@ pub struct GitRepository {
 }
 
 impl GitRepository {
+    /// Fetches a pull request's base and head revisions into a temporary bare Git repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Git cannot be initialized, configured, or used to fetch the
+    /// revisions, if `base_ref` is invalid, or if the fetched head does not match
+    /// `expected_head`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let repository = GitRepository::fetch_pull_request(
+    ///     "owner/project",
+    ///     42,
+    ///     "main",
+    ///     "0123456789abcdef0123456789abcdef01234567",
+    ///     "github-token",
+    /// )?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    ///
+    /// `repository` must use the `owner/name` format, and `token` must be a GitHub
+    /// access token.
+    #[allow(clippy::too_many_arguments)]
     pub fn fetch_pull_request(
         repository: &str,
         pr_number: u64,
@@ -77,6 +101,24 @@ impl GitRepository {
         })
     }
 
+    /// Creates a repository handle for an existing Git worktree.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `path` does not contain a `.git` directory.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::path::Path;
+    ///
+    /// let repository = GitRepository::from_worktree(
+    ///     Path::new("/path/to/worktree"),
+    ///     "base-sha",
+    ///     "head-sha",
+    /// )?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     #[cfg(test)]
     pub fn from_worktree(path: &Path, base_sha: &str, head_sha: &str) -> Result<Self> {
         let git_dir = path.join(".git");
@@ -91,18 +133,92 @@ impl GitRepository {
         })
     }
 
+    /// Provides the commit SHA identified as the repository base.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use anyhow::Result;
+    /// # use crate::repository::GitRepository;
+    /// # fn main() -> Result<()> {
+    /// let repository = GitRepository::fetch_pull_request(
+    ///     "owner/repository",
+    ///     42,
+    ///     "main",
+    ///     "expected-head-sha",
+    ///     "token",
+    /// )?;
+    /// println!("{}", repository.base_sha());
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// Returns the base commit SHA.
     pub fn base_sha(&self) -> &str {
         &self.base_sha
     }
 
+    /// Returns the commit SHA for the repository's head revision.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let head_sha = repository.head_sha();
+    /// assert!(!head_sha.is_empty());
+    /// ```
     pub fn head_sha(&self) -> &str {
         &self.head_sha
     }
 
+    /// Runs a Git command against the repository and returns its standard output.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let repository = GitRepository::fetch_pull_request(
+    ///     "owner/repository",
+    ///     42,
+    ///     "main",
+    ///     "expected-head-sha",
+    ///     "token",
+    /// )?;
+    /// let status = repository.output(["status"], "checking repository status")?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    ///
+    /// `operation` identifies the command in errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command fails or produces invalid UTF-8 output.
     pub fn output<const N: usize>(&self, args: [&str; N], operation: &str) -> Result<String> {
         output_git(&self.git_dir, args, operation)
     }
 
+    /// Runs a Git command against the repository and returns its standard output.
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - Arguments to pass to Git after the repository directory.
+    /// * `operation` - Description of the operation used in error messages.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # fn main() -> anyhow::Result<()> {
+    /// let repository = GitRepository::fetch_pull_request(
+    ///     "owner/repository",
+    ///     42,
+    ///     "main",
+    ///     "0123456789abcdef0123456789abcdef01234567",
+    ///     "token",
+    /// )?;
+    /// let output = repository.output_args(&["status".to_owned()], "inspect repository")?;
+    /// assert!(output.is_empty());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn output_args
     pub fn output_args(&self, args: &[String], operation: &str) -> Result<String> {
         let output = Command::new("git")
             .arg("--git-dir")
@@ -114,6 +230,23 @@ impl GitRepository {
         parse_output(output, operation)
     }
 
+    /// Reads a file from the specified repository revision, truncating its content to the requested length.
+    ///
+    /// `revision` must identify either the base or head revision, and `path` must be a valid repository path.
+    /// The `max_bytes` limit is applied by character count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # // Assumes `repository` is an initialized `GitRepository`.
+    /// let content = repository.read_file("head", "src/lib.rs", 4_000)?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the path or revision is invalid, the file cannot be read, or its content is not valid UTF-8.
+    pub fn read_file(&self, revision: &str, path: &str, max_bytes: usize) -> Result<String> {
     pub fn read_file(&self, revision: &str, path: &str, max_bytes: usize) -> Result<String> {
         validate_path(path)?;
         let sha = self.revision_sha(revision)?;
@@ -122,6 +255,30 @@ impl GitRepository {
         Ok(truncate_chars(&content, max_bytes))
     }
 
+    /// Lists the paths in a repository tree at the specified revision.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let repository = GitRepository::fetch_pull_request(
+    ///     "owner/repository",
+    ///     1,
+    ///     "main",
+    ///     "expected-head-sha",
+    ///     "github-token",
+    /// )?;
+    /// let paths = repository.list_tree("head")?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `revision` is not `base` or `head`, or if Git cannot
+    /// list the tree.
+    ///
+    /// # Returns
+    ///
+    /// The paths tracked at the specified revision.
     pub fn list_tree(&self, revision: &str) -> Result<Vec<String>> {
         let sha = self.revision_sha(revision)?;
         let output = self.output(
@@ -131,6 +288,25 @@ impl GitRepository {
         Ok(output.lines().map(str::to_owned).collect())
     }
 
+    /// Searches a repository revision for matching text.
+    ///
+    /// The search is case-sensitive and treats the query as a fixed string. At most 100
+    /// results are requested, and the returned output is limited to 10,000 characters.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use anyhow::Result;
+    /// # fn example(repository: &GitRepository) -> Result<()> {
+    /// let matches = repository.search("head", "needle", 20)?;
+    /// # assert!(matches.len() <= 10_000);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// The matching lines, or an empty string when no matches are found.
     pub fn search(&self, revision: &str, query: &str, max_results: usize) -> Result<String> {
         if query.trim().is_empty() {
             bail!("search query cannot be empty");
@@ -155,6 +331,31 @@ impl GitRepository {
         }
     }
 
+    /// Produces the diff for a path between the repository's base and head commits.
+    ///
+    /// # Parameters
+    ///
+    /// * `path` - Repository-relative path to include in the diff.
+    ///
+    /// # Returns
+    ///
+    /// The unified diff for the specified path.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # fn example() -> anyhow::Result<()> {
+    /// let repository = GitRepository::fetch_pull_request(
+    ///     "owner/repository",
+    ///     42,
+    ///     "main",
+    ///     "expected-head-sha",
+    ///     "github-token",
+    /// )?;
+    /// let diff = repository.diff_for_path("src/lib.rs")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn diff_for_path(&self, path: &str) -> Result<String> {
         validate_path(path)?;
         self.output_args(
@@ -172,6 +373,37 @@ impl GitRepository {
         )
     }
 
+    /// Lists paths changed between two Git commits.
+    ///
+    /// Returns an empty list when `from_sha` is empty or matches `to_sha`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let repository = GitRepository::fetch_pull_request(
+    ///     "owner/repository",
+    ///     42,
+    ///     "main",
+    ///     "expected-head-sha",
+    ///     "token",
+    /// )?;
+    /// let paths = repository.changed_paths_between("base-sha", "head-sha")?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either SHA is not a valid Git object SHA or if Git
+    /// cannot determine the changed paths.
+    ///
+    /// # Arguments
+    ///
+    /// * `from_sha` - The earlier commit SHA.
+    /// * `to_sha` - The later commit SHA.
+    ///
+    /// # Returns
+    ///
+    /// A list of paths changed between the two commits.
     pub fn changed_paths_between(&self, from_sha: &str, to_sha: &str) -> Result<Vec<String>> {
         if from_sha.trim().is_empty() || from_sha == to_sha {
             return Ok(Vec::new());
@@ -197,6 +429,34 @@ impl GitRepository {
             .collect())
     }
 
+    /// Searches a repository revision for symbol references or definitions.
+    ///
+    /// # Parameters
+    ///
+    /// * `revision` - The logical revision to search, such as `base` or `head`.
+    /// * `query` - The symbol name or text to search for.
+    /// * `max_results` - The maximum number of matches to return, capped at 100.
+    /// * `definitions_only` - Whether to restrict matches to likely symbol definitions.
+    ///
+    /// # Returns
+    ///
+    /// Matching lines truncated to 10,000 characters, or an empty string when no matches are found.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # fn example() -> anyhow::Result<()> {
+    /// let repository = GitRepository::fetch_pull_request(
+    ///     "owner/repository",
+    ///     42,
+    ///     "main",
+    ///     "0123456789abcdef0123456789abcdef01234567",
+    ///     "token",
+    /// )?;
+    /// let matches = repository.search_symbol("head", "process_data", 20, true)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn search_symbol(
         &self,
         revision: &str,
@@ -230,6 +490,18 @@ impl GitRepository {
         }
     }
 
+    /// Resolves a logical revision name to its corresponding commit SHA.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `revision` is not `base` or `head`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let sha = repository.revision_sha("head")?;
+    /// assert_eq!(sha, repository.head_sha());
+    /// ```
     fn revision_sha(&self, revision: &str) -> Result<&str> {
         match revision {
             "base" => Ok(&self.base_sha),
@@ -239,10 +511,38 @@ impl GitRepository {
     }
 }
 
+/// Determines whether a value has the expected format of a Git SHA.
+///
+/// # Examples
+///
+/// ```
+/// assert!(looks_like_sha("0123456"));
+/// assert!(!looks_like_sha("not-a-sha"));
+/// ```
+///
+/// # Returns
+///
+/// `true` if the value contains 7 to 64 ASCII hexadecimal characters, `false` otherwise.
 fn looks_like_sha(value: &str) -> bool {
     (7..=64).contains(&value.len()) && value.chars().all(|character| character.is_ascii_hexdigit())
 }
 
+/// Builds a regular expression pattern for matching common definitions of a symbol.
+///
+/// # Examples
+///
+/// ```
+/// let pattern = definition_pattern("Widget");
+/// assert!(pattern.contains("Widget"));
+/// ```
+///
+/// # Returns
+///
+/// A regular expression pattern containing common definition forms for `symbol`.
+///
+/// # Arguments
+///
+/// * `symbol` - The symbol name to match.
 fn definition_pattern(symbol: &str) -> String {
     let escaped = regex_escape(symbol);
     format!(
@@ -250,6 +550,13 @@ fn definition_pattern(symbol: &str) -> String {
     )
 }
 
+/// Escapes regular expression metacharacters in a string.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(regex_escape("a+b"), r"a\+b");
+/// ```
 fn regex_escape(value: &str) -> String {
     value
         .chars()
@@ -263,6 +570,33 @@ fn regex_escape(value: &str) -> String {
         .collect()
 }
 
+/// Finds the commit where the fetched base and head histories converge, deepening
+/// the repository history when necessary.
+///
+/// # Arguments
+///
+/// * `git_dir` - Path to the bare Git repository.
+/// * `auth` - Optional authentication header for fetching additional history.
+/// * `base_spec` - Fetch refspec for the base revision.
+/// * `head_spec` - Fetch refspec for the pull request head.
+///
+/// # Returns
+///
+/// The SHA of the merge-base commit.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+///
+/// let sha = merge_base(
+///     Path::new("/path/to/repository.git"),
+///     None,
+///     "refs/heads/main:refs/prbot/base",
+///     "refs/pull/1/head:refs/prbot/head",
+/// )?;
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 fn merge_base(
     git_dir: &Path,
     auth: Option<&str>,
@@ -321,6 +655,17 @@ fn merge_base(
     .to_owned())
 }
 
+/// Runs a Git command against a repository directory with side-effect-reducing configuration and optional GitHub authentication.
+///
+/// # Examples
+///
+/// ```no_run
+/// let git_dir = std::path::Path::new("/path/to/repository.git");
+/// run_git_dir(git_dir, ["status"], None, "check repository")?;
+/// # Ok::<(), anyhow::Error>(())
+/// ```///
+///
+/// `auth` supplies the GitHub HTTP authentication header when provided.
 fn run_git_dir<const N: usize>(
     git_dir: &Path,
     args: [&str; N],
@@ -343,6 +688,20 @@ fn run_git_dir<const N: usize>(
     run_plain(&mut command, operation)
 }
 
+/// Runs a Git command for a repository and returns its UTF-8 standard output.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+///
+/// let output = output_git(
+///     Path::new("/path/to/repository.git"),
+///     ["rev-parse", "HEAD"],
+///     "read the repository head",
+/// )?;
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 fn output_git<const N: usize>(git_dir: &Path, args: [&str; N], operation: &str) -> Result<String> {
     let output = Command::new("git")
         .arg("--git-dir")
@@ -354,6 +713,18 @@ fn output_git<const N: usize>(git_dir: &Path, args: [&str; N], operation: &str) 
     parse_output(output, operation)
 }
 
+/// Executes a command and reports an error when it fails.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let mut command = std::process::Command::new("true");
+/// run_plain(&mut command, "run command")?;
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+///
+/// `operation` identifies the command in any returned error.
+fn run_plain(command: &mut Command, operation: &str) -> Result<()>
 fn run_plain(command: &mut Command, operation: &str) -> Result<()> {
     let output = command
         .output()
@@ -361,6 +732,37 @@ fn run_plain(command: &mut Command, operation: &str) -> Result<()> {
     parse_output(output, operation).map(|_| ())
 }
 
+/// Parses a completed command's output as UTF-8 text, reporting failures with the operation context.
+
+///
+
+/// # Examples
+
+///
+
+/// ```
+
+/// let output = std::process::Command::new("printf")
+
+///     .arg("ok")
+
+///     .output()
+
+///     .unwrap();
+
+/// let text = parse_output(output, "read output").unwrap();
+
+/// assert_eq!(text, "ok");
+
+/// ```
+
+///
+
+/// # Errors
+
+///
+
+/// Returns an error when the command fails or its standard output is not valid UTF-8.
 fn parse_output(output: Output, operation: &str) -> Result<String> {
     if !output.status.success() {
         bail!(

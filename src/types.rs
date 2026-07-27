@@ -10,14 +10,75 @@ pub struct ReviewManifest {
 }
 
 impl ReviewManifest {
+    /// Counts the diff hunks eligible for review.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeMap;
+    ///
+    /// let manifest = ReviewManifest {
+    ///     files: Vec::new(),
+    ///     bundles: Vec::new(),
+    ///     ignored: Vec::new(),
+    ///     related_files: BTreeMap::new(),
+    /// };
+    ///
+    /// assert_eq!(manifest.eligible_hunks(), 0);
+    /// ```
     pub fn eligible_hunks(&self) -> usize {
         self.files.iter().map(|file| file.hunks.len()).sum()
     }
 
+    /// Calculates the total number of hunks assigned to review bundles.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeMap;
+    ///
+    /// let manifest = ReviewManifest {
+    ///     files: vec![],
+    ///     bundles: vec![
+    ///         ReviewBundle {
+    ///             id: "bundle-1".into(),
+    ///             paths: vec![],
+    ///             hunk_count: 2,
+    ///             risk: RiskLevel::Low,
+    ///             related_files: vec![],
+    ///         },
+    ///         ReviewBundle {
+    ///             id: "bundle-2".into(),
+    ///             paths: vec![],
+    ///             hunk_count: 3,
+    ///             risk: RiskLevel::Medium,
+    ///             related_files: vec![],
+    ///         },
+    ///     ],
+    ///     ignored: vec![],
+    ///     related_files: BTreeMap::new(),
+    /// };
+    ///
+    /// assert_eq!(manifest.assigned_hunks(), 5);
+    /// ```
     pub fn assigned_hunks(&self) -> usize {
         self.bundles.iter().map(|bundle| bundle.hunk_count).sum()
     }
 
+    /// Determines whether all eligible hunks have been assigned to review bundles.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let manifest = ReviewManifest {
+    ///     files: vec![],
+    ///     bundles: vec![],
+    ///     ignored: vec![],
+    ///     related_files: std::collections::BTreeMap::new(),
+    /// };
+    ///
+    /// assert!(manifest.complete());
+    /// ```
     pub fn complete(&self) -> bool {
         self.eligible_hunks() == self.assigned_hunks()
     }

@@ -6,7 +6,44 @@ use anyhow::{Context, Result};
 use std::env;
 use std::sync::Arc;
 
-#[allow(clippy::too_many_arguments)]
+/// Answers an authorized pull-request owner's question and posts the response to GitHub.
+///
+/// The response may use read-only repository tools and includes recent discussion and
+/// inline review comments as context.
+///
+/// # Parameters
+///
+/// * `pr_context` - Context describing the pull request.
+/// * `comments` - Existing pull-request discussion comments.
+/// * `command_id` - Identifier used to tag the response and add a reaction.
+/// * `question` - The owner's question to answer.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example(
+/// #     github: &GitHubClient,
+/// #     api_key: &str,
+/// #     repository: std::sync::Arc<GitRepository>,
+/// #     config: &ReviewConfig,
+/// #     budget: std::sync::Arc<Budget>,
+/// # ) -> anyhow::Result<()> {
+/// answer_command(
+///     github,
+///     api_key,
+///     42,
+///     repository,
+///     String::new(),
+///     &[],
+///     123,
+///     "What does this pull request change?",
+///     config,
+///     budget,
+/// )
+/// .await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn answer_command(
     github: &GitHubClient,
     api_key: &str,
@@ -79,6 +116,16 @@ Use repository tools when the answer depends on code. Reply with concise GitHub 
     Ok(())
 }
 
+/// Truncates a string to at most the specified number of characters.
+///
+/// Appends `...` when the input exceeds the limit.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(truncate("Hello, world!", 5), "Hello...");
+/// assert_eq!(truncate("Hi", 5), "Hi");
+/// ```
 fn truncate(value: &str, max_chars: usize) -> String {
     let result = value.chars().take(max_chars).collect::<String>();
     if result.chars().count() < value.chars().count() {

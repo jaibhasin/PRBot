@@ -18,6 +18,30 @@ pub struct SummaryState {
 }
 
 impl SummaryState {
+    /// Removes remembered findings associated with the specified file paths.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::{BTreeMap, BTreeSet};
+    ///
+    /// let mut state = SummaryState {
+    ///     version: 1,
+    ///     reviewed_sha: String::new(),
+    ///     fingerprints: BTreeSet::from(["fp-a".to_string(), "fp-b".to_string()]),
+    ///     fingerprint_paths: BTreeMap::from([
+    ///         ("fp-a".to_string(), "src/a.rs".to_string()),
+    ///         ("fp-b".to_string(), "src/b.rs".to_string()),
+    ///     ]),
+    ///     handled_comment_ids: BTreeSet::new(),
+    /// };
+    /// let paths = BTreeSet::from(["src/a.rs".to_string()]);
+    ///
+    /// state.forget_paths(&paths);
+    ///
+    /// assert!(!state.fingerprints.contains("fp-a"));
+    /// assert!(state.fingerprints.contains("fp-b"));
+    /// ```
     pub fn forget_paths(&mut self, paths: &BTreeSet<String>) {
         let stale = self
             .fingerprint_paths
@@ -31,6 +55,18 @@ impl SummaryState {
         }
     }
 
+    /// Records a finding's fingerprint and associates it with the finding's path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// state.remember_finding(&finding);
+    /// assert!(state.fingerprints.contains(&finding.fingerprint));
+    /// assert_eq!(
+    ///     state.fingerprint_paths.get(&finding.fingerprint),
+    ///     Some(&finding.candidate.path)
+    /// );
+    /// ```
     pub fn remember_finding(&mut self, finding: &ResolvedFinding) {
         self.fingerprints.insert(finding.fingerprint.clone());
         self.fingerprint_paths
@@ -38,6 +74,36 @@ impl SummaryState {
     }
 }
 
+/// Renders a Markdown summary of a pull request review, including review status, coverage, findings, budget metrics, and serialized contextual state.
+///
+/// # Examples
+///
+/// ```ignore
+/// let summary = render_summary(
+///     "owner/repository",
+///     42,
+///     &outcome,
+///     &findings,
+///     &state,
+///     "review-model",
+///     "verification-model",
+/// );
+/// assert!(summary.contains("PRBot contextual review"));
+/// ```
+///
+/// # Parameters
+///
+/// * `repository` - Repository identifier.
+/// * `pr_number` - Pull request number.
+/// * `outcome` - Results and metrics from the review run.
+/// * `findings` - Findings published or evaluated during the review.
+/// * `state` - Contextual review state to embed in the summary.
+/// * `review_model` - Name of the model used for review.
+/// * `verification_model` - Name of the model used for verification.
+///
+/// # Returns
+///
+/// A Markdown-formatted review summary containing serialized contextual state.
 pub fn render_summary(
     repository: &str,
     pr_number: u64,
@@ -95,6 +161,17 @@ Budget: `{}` input tokens, `{}` output tokens, `${:.4}` estimated, `{}s`\n\n\
     )
 }
 
+/// Extracts the persisted review state embedded in a summary body.
+///
+/// Returns `Some` when the body contains valid serialized state between the
+/// summary state markers, or `None` when the markers are missing or the state
+/// cannot be deserialized.
+///
+/// # Examples
+///
+/// ```
+/// assert!(parse_summary_state("not a summary").is_none());
+/// ```
 pub fn parse_summary_state(body: &str) -> Option<SummaryState> {
     let start = body.find(STATE_PREFIX)? + STATE_PREFIX.len();
     let rest = &body[start..];
@@ -102,6 +179,19 @@ pub fn parse_summary_state(body: &str) -> Option<SummaryState> {
     serde_json::from_str(&rest[..end]).ok()
 }
 
+/// Formats a resolved finding as a Markdown comment body with its fingerprint, title, description, and optional evidence.
+///
+/// File-level findings also include a note explaining that the anchor could not be uniquely resolved.
+///
+/// # Examples
+///
+/// ```
+/// # fn example(finding: &ResolvedFinding) {
+/// let body = finding_body(finding);
+/// assert!(body.starts_with("<!-- prbot:finding:"));
+/// # }
+/// ```
+pub fn finding_body(finding: &ResolvedFinding) -> String
 pub fn finding_body(finding: &ResolvedFinding) -> String {
     let evidence = if finding.candidate.evidence.is_empty() {
         String::new()
