@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ReviewManifest {
@@ -161,6 +162,8 @@ pub enum RiskLevel {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CandidateFinding {
+    #[serde(default)]
+    pub agent: ReviewAgent,
     pub path: String,
     pub side: DiffSide,
     pub anchor: String,
@@ -188,13 +191,85 @@ pub enum Priority {
 #[serde(rename_all = "snake_case")]
 pub enum FindingCategory {
     Correctness,
+    Architecture,
     Security,
     Reliability,
     Compatibility,
     Performance,
     Concurrency,
     Api,
+    Documentation,
     Other,
+}
+
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewAgent {
+    #[default]
+    Correctness,
+    Architecture,
+    Security,
+    Performance,
+    Documentation,
+}
+
+impl ReviewAgent {
+    pub const SPECIALISTS: [Self; 4] = [
+        Self::Architecture,
+        Self::Security,
+        Self::Performance,
+        Self::Documentation,
+    ];
+
+    pub const REVIEWERS: [Self; 5] = [
+        Self::Correctness,
+        Self::Architecture,
+        Self::Security,
+        Self::Performance,
+        Self::Documentation,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Correctness => "Correctness and reliability",
+            Self::Architecture => "Architecture",
+            Self::Security => "Security",
+            Self::Performance => "Performance",
+            Self::Documentation => "Documentation",
+        }
+    }
+}
+
+impl fmt::Display for ReviewAgent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Correctness => "correctness",
+            Self::Architecture => "architecture",
+            Self::Security => "security",
+            Self::Performance => "performance",
+            Self::Documentation => "documentation",
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentStatus {
+    Skipped,
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AgentRun {
+    pub agent: ReviewAgent,
+    pub status: AgentStatus,
+    pub bundle_ids: Vec<String>,
+    pub rationale: String,
+    pub candidate_findings: usize,
+    pub accepted_findings: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -263,6 +338,8 @@ pub struct RunOutcome {
     pub eligible_hunks: usize,
     pub assigned_hunks: usize,
     pub findings: usize,
+    #[serde(default)]
+    pub active_findings: usize,
     pub skipped_findings: usize,
     pub failed_bundles: Vec<String>,
     pub budget: BudgetSnapshot,
@@ -270,4 +347,8 @@ pub struct RunOutcome {
     pub incremental: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewed_bundles: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_runs: Vec<AgentRun>,
+    #[serde(default)]
+    pub router_fallback: bool,
 }

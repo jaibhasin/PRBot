@@ -371,6 +371,7 @@ mod tests {
 
     fn candidate(side: DiffSide, anchor: &str) -> CandidateFinding {
         CandidateFinding {
+            agent: crate::types::ReviewAgent::Correctness,
             path: "src/main.rs".to_owned(),
             side,
             anchor: anchor.to_owned(),

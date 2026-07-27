@@ -1,5 +1,8 @@
-use super::{build_context, build_manifest, GitRepository, RepositoryTools};
+use super::{
+    build_context, build_manifest, execute_bounded_for_agent, GitRepository, RepositoryTools,
+};
 use crate::config::ReviewConfig;
+use crate::types::ReviewAgent;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -40,6 +43,7 @@ impl Fixture {
             "use sample::compute;\n\nfn verifies_compute() { assert_eq!(compute(1), 2); }\n",
         )
         .expect("test source");
+        fs::write(root.join("AGENTS.md"), "DO_NOT_LEAK_THIS\n").expect("agent instructions");
         git(&root, &["add", "."]);
         git(&root, &["commit", "-m", "base"]);
         let base = output(&root, &["rev-parse", "HEAD"]);
@@ -141,6 +145,38 @@ fn tools_are_revision_scoped_bounded_and_reject_traversal() {
         .changed_paths_between(&fixture.base, &fixture.head)
         .expect("changed paths");
     assert_eq!(changed, vec!["src/lib.rs".to_owned()]);
+}
+
+#[tokio::test]
+async fn documentation_tools_cannot_read_agent_instructions() {
+    let fixture = Fixture::new();
+    let tools = Arc::new(RepositoryTools::new(
+        fixture.repository(),
+        "trusted AGENTS.md-derived instructions".to_owned(),
+    ));
+    let search = tools
+        .execute(
+            "search_code",
+            r#"{"query":"DO_NOT_LEAK_THIS","revision":"head","max_results":20}"#,
+        )
+        .expect("search");
+    assert!(search.is_empty());
+    assert!(execute_bounded_for_agent(
+        Arc::clone(&tools),
+        ReviewAgent::Documentation,
+        "read_file".to_owned(),
+        r#"{"path":"AGENTS.md","revision":"head"}"#.to_owned(),
+    )
+    .await
+    .is_err());
+    assert!(execute_bounded_for_agent(
+        tools,
+        ReviewAgent::Documentation,
+        "get_pr_context".to_owned(),
+        "{}".to_owned(),
+    )
+    .await
+    .is_err());
 }
 
 /// Runs a Git command in the specified directory and panics if it fails.

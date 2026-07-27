@@ -1,9 +1,19 @@
+#[cfg(test)]
+mod integration_tests;
 mod prompts;
+mod router;
+mod tasks;
+mod verifier;
 
 use crate::config::ReviewConfig;
 use crate::llm::LlmClient;
-use crate::repository::{execute_bounded, render_repo_map, tool_definitions, RepositoryTools};
-use crate::types::{CandidateFinding, Priority, ReviewBundle, ReviewManifest, RiskLevel};
+use crate::repository::{
+    execute_bounded_for_agent, is_agent_instructions, render_repo_map, tool_definitions,
+    RepositoryTools,
+};
+use crate::types::{
+    AgentRun, AgentStatus, CandidateFinding, ReviewAgent, ReviewBundle, ReviewManifest,
+};
 use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt};
 use serde::Deserialize;
@@ -12,16 +22,10 @@ use std::sync::Arc;
 pub struct AgentReviewResult {
     pub findings: Vec<CandidateFinding>,
     pub failed_bundles: Vec<String>,
+    pub agent_runs: Vec<AgentRun>,
+    pub router_fallback: bool,
 }
 
-/// Reviews all bundles in a manifest and returns the accepted findings and failed bundle identifiers.
-///
-/// # Examples
-///
-/// ```no_run
-/// let result = review_manifest(&client, tools, &manifest, &config).await;
-/// println!("{} findings", result.findings.len());
-/// ```
 pub async fn review_manifest(
     client: &LlmClient,
     tools: Arc<RepositoryTools>,
@@ -31,17 +35,6 @@ pub async fn review_manifest(
     review_bundles(client, tools, manifest, &manifest.bundles, config).await
 }
 
-/// Reviews the specified bundles and returns verified findings together with any failed review stages.
-///
-/// Review tasks are run concurrently, followed by a cross-bundle audit when multiple bundles
-/// are available and independent verification of the collected findings.
-///
-/// # Examples
-///
-/// ```ignore
-/// let result = review_bundles(&client, tools, &manifest, &bundles, &config).await;
-/// assert!(result.failed_bundles.is_empty());
-/// ```
 pub async fn review_bundles(
     client: &LlmClient,
     tools: Arc<RepositoryTools>,
@@ -50,50 +43,45 @@ pub async fn review_bundles(
     config: &ReviewConfig,
 ) -> AgentReviewResult {
     if bundles.is_empty() {
-        return AgentReviewResult {
-            findings: Vec::new(),
-            failed_bundles: Vec::new(),
-        };
+        return empty_result();
     }
+
+    let routing = router::route(client, manifest, bundles, config).await;
+    let mut runs = tasks::initial_agent_runs(bundles, &routing.assignments);
+    let tasks = tasks::build_tasks(bundles, &routing.assignments);
     let repo_map = Arc::new(render_repo_map(manifest));
     let files = Arc::new(manifest.files.clone());
     let config = Arc::new(config.clone());
-    let tasks = bundles
-        .iter()
-        .flat_map(|bundle| {
-            review_roles(bundle)
-                .into_iter()
-                .map(|role| (bundle.clone(), role))
-        })
-        .collect::<Vec<_>>();
     let results = stream::iter(tasks)
-        .map(|(bundle, role)| {
+        .map(|task| {
             let client = client.clone();
             let tools = Arc::clone(&tools);
             let repo_map = Arc::clone(&repo_map);
             let files = Arc::clone(&files);
             let config = Arc::clone(&config);
             async move {
-                let prompt = prompts::bundle_prompt(&bundle, role, &files, &repo_map, &config);
-                let system = prompts::reviewer_system();
+                let agent = task.agent;
+                let prompt =
+                    prompts::review_prompt(agent, &task.bundles, &files, &repo_map, &config);
                 let tool_runner = Arc::clone(&tools);
-                let response = client
-                    .run_agent(
-                        &config.review_model,
-                        system,
-                        &prompt,
-                        tool_definitions(),
-                        12,
-                        move |name, arguments| {
-                            let tools = Arc::clone(&tool_runner);
-                            async move { execute_bounded(tools, name, arguments).await }
-                        },
-                    )
-                    .await;
-                (
-                    format!("{}:{role}", bundle.id),
-                    response.and_then(|raw| parse_findings(&raw)),
-                )
+                let response =
+                    client
+                        .run_agent(
+                            &config.review_model,
+                            prompts::reviewer_system(agent),
+                            &prompt,
+                            tool_definitions(),
+                            12,
+                            move |name, arguments| {
+                                let tools = Arc::clone(&tool_runner);
+                                async move {
+                                    execute_bounded_for_agent(tools, agent, name, arguments).await
+                                }
+                            },
+                        )
+                        .await
+                        .and_then(|raw| parse_findings(&raw, agent));
+                (task, response)
             }
         })
         .buffer_unordered(config.max_concurrency)
@@ -102,198 +90,59 @@ pub async fn review_bundles(
 
     let mut findings = Vec::new();
     let mut failed_bundles = Vec::new();
-    for (bundle, result) in results {
+    for (task, result) in results {
+        let run = runs
+            .get_mut(&task.agent)
+            .expect("every task has an agent run");
         match result {
-            Ok(mut bundle_findings) => findings.append(&mut bundle_findings),
+            Ok(mut task_findings) => {
+                run.candidate_findings += task_findings.len();
+                findings.append(&mut task_findings);
+            }
             Err(error) => {
-                eprintln!("review bundle {bundle} failed: {error:#}");
-                failed_bundles.push(bundle);
+                eprintln!("review task {} failed: {error:#}", task.label);
+                run.status = AgentStatus::Failed;
+                failed_bundles.push(task.label);
             }
         }
     }
 
-    if bundles.len() > 1 || manifest.bundles.len() > 1 {
-        match run_cross_bundle_audit(client, Arc::clone(&tools), manifest, &config).await {
-            Ok(mut audit_findings) => findings.append(&mut audit_findings),
+    let verified =
+        match verifier::verify_findings(client, tools, manifest, &findings, &config).await {
+            Ok(value) => value,
             Err(error) => {
-                eprintln!("cross-bundle audit failed: {error:#}");
-                failed_bundles.push("cross-bundle-audit".to_owned());
+                eprintln!("independent verification failed: {error:#}");
+                failed_bundles.push("independent-verifier".to_owned());
+                Vec::new()
             }
+        };
+    for finding in &verified {
+        if let Some(run) = runs.get_mut(&finding.agent) {
+            run.accepted_findings += 1;
         }
     }
 
-    let verified = match verify_findings(client, tools, manifest, &findings, &config).await {
-        Ok(value) => value,
-        Err(error) => {
-            eprintln!("independent verification failed: {error:#}");
-            failed_bundles.push("independent-verifier".to_owned());
-            Vec::new()
-        }
-    };
     AgentReviewResult {
         findings: verified,
         failed_bundles,
+        agent_runs: ReviewAgent::REVIEWERS
+            .into_iter()
+            .filter_map(|agent| runs.remove(&agent))
+            .collect(),
+        router_fallback: routing.fallback,
     }
 }
 
-/// Selects review roles based on a bundle's risk level and paths.
-///
-/// # Examples
-///
-/// ```
-/// let bundle = ReviewBundle {
-///     id: "auth".to_string(),
-///     paths: vec!["src/auth.rs".to_string()],
-///     risk: RiskLevel::Critical,
-/// };
-///
-/// let roles = review_roles(&bundle);
-/// assert!(roles.iter().any(|role| role.contains("security")));
-/// ```
-fn review_roles(bundle: &ReviewBundle) -> Vec<&'static str> {
-    let mut roles = vec!["correctness and reliability"];
-    let joined = bundle.paths.join(" ").to_ascii_lowercase();
-    match bundle.risk {
-        RiskLevel::Critical => {
-            roles.push("security and authorization boundaries");
-            roles.push("api contracts and compatibility");
-        }
-        RiskLevel::High => {
-            roles.push("concurrency, state transitions, and compatibility");
-            if joined.contains("perf")
-                || joined.contains("cache")
-                || joined.contains("bench")
-                || joined.contains("hot")
-            {
-                roles.push("performance and resource usage");
-            }
-        }
-        RiskLevel::Medium => {
-            if joined.contains("api")
-                || joined.contains("schema")
-                || joined.contains("proto")
-                || joined.contains("openapi")
-            {
-                roles.push("api contracts and compatibility");
-            }
-            if joined.contains("async")
-                || joined.contains("thread")
-                || joined.contains("mutex")
-                || joined.contains("channel")
-            {
-                roles.push("concurrency and shared-state hazards");
-            }
-        }
-        RiskLevel::Low => {}
+pub fn empty_result() -> AgentReviewResult {
+    AgentReviewResult {
+        findings: Vec::new(),
+        failed_bundles: Vec::new(),
+        agent_runs: tasks::empty_agent_runs(),
+        router_fallback: false,
     }
-    roles.sort_unstable();
-    roles.dedup();
-    roles
 }
 
-/// Audits relationships and consistency across multiple review bundles.
-///
-/// # Errors
-///
-/// Returns an error if the audit agent fails or produces invalid findings.
-///
-/// # Examples
-///
-/// ```ignore
-/// let findings = run_cross_bundle_audit(&client, tools, &manifest, &config).await?;
-/// # Ok::<(), anyhow::Error>(())
-/// ```
-///
-/// Returns the findings produced by the cross-bundle audit.
-async fn run_cross_bundle_audit(
-    client: &LlmClient,
-    tools: Arc<RepositoryTools>,
-    manifest: &ReviewManifest,
-    config: &ReviewConfig,
-) -> Result<Vec<CandidateFinding>> {
-    let prompt = prompts::audit_prompt(manifest);
-    let tool_runner = Arc::clone(&tools);
-    let raw = client
-        .run_agent(
-            &config.review_model,
-            prompts::auditor_system(),
-            &prompt,
-            tool_definitions(),
-            10,
-            move |name, arguments| {
-                let tools = Arc::clone(&tool_runner);
-                async move { execute_bounded(tools, name, arguments).await }
-            },
-        )
-        .await?;
-    parse_findings(&raw)
-}
-
-/// Independently verifies candidate findings and returns the accepted findings in priority order.
-///
-/// A finding is accepted only when its index is selected by the verifier, its priority is above `P3`, and its confidence is at least `0.8`.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// # async fn example(
-/// #     client: &LlmClient,
-/// #     tools: std::sync::Arc<RepositoryTools>,
-/// #     manifest: &ReviewManifest,
-/// #     config: &ReviewConfig,
-/// # ) -> Result<()> {
-/// let accepted = verify_findings(client, tools, manifest, &[], config).await?;
-/// assert!(accepted.is_empty());
-/// # Ok(())
-/// # }
-/// ```
-async fn verify_findings(
-    client: &LlmClient,
-    tools: Arc<RepositoryTools>,
-    manifest: &ReviewManifest,
-    findings: &[CandidateFinding],
-    config: &ReviewConfig,
-) -> Result<Vec<CandidateFinding>> {
-    if findings.is_empty() {
-        return Ok(Vec::new());
-    }
-    let prompt = prompts::verification_prompt(manifest, findings)?;
-    let tool_runner = Arc::clone(&tools);
-    let raw = client
-        .run_agent(
-            &config.verification_model,
-            prompts::verifier_system(),
-            &prompt,
-            tool_definitions(),
-            8,
-            move |name, arguments| {
-                let tools = Arc::clone(&tool_runner);
-                async move { execute_bounded(tools, name, arguments).await }
-            },
-        )
-        .await?;
-    let response: VerificationResponse = parse_json(&raw)?;
-    let mut accepted = response
-        .accepted_indices
-        .into_iter()
-        .filter_map(|index| findings.get(index).cloned())
-        .filter(|finding| finding.priority != Priority::P3 && finding.confidence >= 0.8)
-        .collect::<Vec<_>>();
-    accepted.sort_by_key(|finding| finding.priority);
-    Ok(accepted)
-}
-
-/// Parses agent output into findings and discards entries with empty required fields.
-///
-/// # Examples
-///
-/// ```
-/// let findings = parse_findings(r#"{"findings":[]}"#).unwrap();
-/// assert!(findings.is_empty());
-/// ```
-///
-/// Returns the valid findings parsed from the response.
-fn parse_findings(raw: &str) -> Result<Vec<CandidateFinding>> {
+fn parse_findings(raw: &str, agent: ReviewAgent) -> Result<Vec<CandidateFinding>> {
     let response: FindingResponse = parse_json(raw)?;
     Ok(response
         .findings
@@ -303,20 +152,20 @@ fn parse_findings(raw: &str) -> Result<Vec<CandidateFinding>> {
                 && !finding.anchor.trim().is_empty()
                 && !finding.title.trim().is_empty()
                 && !finding.body.trim().is_empty()
+                && !(agent == ReviewAgent::Documentation
+                    && (is_agent_instructions(&finding.path)
+                        || finding
+                            .evidence
+                            .iter()
+                            .any(|span| is_agent_instructions(&span.path))))
+        })
+        .map(|mut finding| {
+            finding.agent = agent;
+            finding
         })
         .collect())
 }
 
-/// Parses agent output as JSON, including responses wrapped in a `json` code fence.
-///
-/// # Examples
-///
-/// ```
-/// let value: serde_json::Value = parse_json(r#"{"accepted": true}"#).unwrap();
-/// assert_eq!(value["accepted"], true);
-/// ```
-///
-/// Returns an error with context when the input is not valid JSON.
 fn parse_json<T: for<'de> Deserialize<'de>>(raw: &str) -> Result<T> {
     let trimmed = raw.trim();
     let candidate = trimmed
@@ -332,33 +181,28 @@ struct FindingResponse {
     findings: Vec<CandidateFinding>,
 }
 
-#[derive(Deserialize)]
-struct VerificationResponse {
-    accepted_indices: Vec<usize>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::RiskLevel;
 
     #[test]
-    fn rejects_empty_finding_fields() {
-        let raw = r#"{"findings":[{"path":"","side":"RIGHT","anchor":"x","priority":"P1","category":"correctness","title":"Bug","body":"Impact","evidence":[],"confidence":0.9}]}"#;
-        assert!(parse_findings(raw).expect("parse").is_empty());
+    fn injects_agent_identity_and_rejects_empty_fields() {
+        let raw = r#"{"findings":[
+            {"path":"","side":"RIGHT","anchor":"x","priority":"P1","category":"correctness","title":"Bug","body":"Impact","evidence":[],"confidence":0.9},
+            {"path":"src/a.rs","side":"RIGHT","anchor":"x","priority":"P1","category":"security","title":"Bug","body":"Impact","evidence":[],"confidence":0.9}
+        ]}"#;
+        let findings = parse_findings(raw, ReviewAgent::Security).expect("parse");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].agent, ReviewAgent::Security);
     }
 
     #[test]
-    fn critical_bundles_get_security_and_api_specialists() {
-        let bundle = ReviewBundle {
-            id: "bundle-1".to_owned(),
-            paths: vec!["src/auth/api.rs".to_owned()],
-            hunk_count: 1,
-            risk: RiskLevel::Critical,
-            related_files: Vec::new(),
-        };
-        let roles = review_roles(&bundle);
-        assert!(roles.iter().any(|role| role.contains("security")));
-        assert!(roles.iter().any(|role| role.contains("api")));
+    fn rejects_documentation_findings_that_target_agent_instructions() {
+        let raw = r#"{"findings":[
+            {"path":"AGENTS.md","side":"RIGHT","anchor":"rule","priority":"P2","category":"documentation","title":"Update instructions","body":"Change AGENTS.md.","evidence":[],"confidence":0.9},
+            {"path":"src/a.rs","side":"RIGHT","anchor":"x","priority":"P2","category":"documentation","title":"Update instructions","body":"Change AGENTS.md.","evidence":[{"path":"nested/AGENTS.md","revision":"head","explanation":"target"}],"confidence":0.9}
+        ]}"#;
+        let findings = parse_findings(raw, ReviewAgent::Documentation).expect("parse");
+        assert!(findings.is_empty());
     }
 }

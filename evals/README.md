@@ -15,3 +15,7 @@ Targets: precision ≥ 90%, P0/P1 recall ≥ 75%, anchors 100%, coverage ≥ 99%
 ## Qodo harness
 
 See `evals/qodo/README.md`.
+
+## Specialist routing
+
+See `evals/router/README.md`.

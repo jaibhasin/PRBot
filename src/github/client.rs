@@ -1,7 +1,7 @@
 use super::types::{
-    CheckRun, CheckRunsResponse, CommentRequest, CreateReviewRequest, CreatedReview, Issue,
-    IssueComment, PermissionResponse, PullRequest, ReactionRequest, ReviewComment,
-    ReviewInputComment,
+    CheckOutputRequest, CheckRun, CheckRunsResponse, CommentRequest, CreateCheckRunRequest,
+    CreateReviewRequest, CreatedCheckRun, CreatedReview, Issue, IssueComment, PermissionResponse,
+    PullRequest, ReactionRequest, ReviewComment, ReviewInputComment,
 };
 use anyhow::{bail, Context, Result};
 use reqwest::header::LINK;
@@ -14,6 +14,24 @@ const GITHUB_API_URL: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const GITHUB_ACCEPT: &str = "application/vnd.github+json";
 const USER_AGENT: &str = "prbot";
+const REVIEW_CHECK_NAME: &str = "PRBot review";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CheckConclusion {
+    Success,
+    Failure,
+    Cancelled,
+}
+
+impl CheckConclusion {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Failure => "failure",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct GitHubClient {
@@ -213,6 +231,36 @@ impl GitHubClient {
             }
         }
         Ok(all)
+    }
+
+    /// Creates a completed PRBot check run against an exact commit.
+    pub async fn create_review_check(
+        &self,
+        sha: &str,
+        conclusion: CheckConclusion,
+        title: &str,
+        summary: &str,
+    ) -> Result<u64> {
+        let request = CreateCheckRunRequest {
+            name: REVIEW_CHECK_NAME,
+            head_sha: sha.to_owned(),
+            status: "completed",
+            conclusion: conclusion.as_str(),
+            output: CheckOutputRequest {
+                title: title.to_owned(),
+                summary: summary.chars().take(65_535).collect(),
+            },
+        };
+        let response = self
+            .send_with_retry(
+                Method::POST,
+                "check-runs",
+                Some(&request),
+                "create PRBot review check",
+            )
+            .await?;
+        let created: CreatedCheckRun = parse_json(response, "create PRBot review check").await?;
+        Ok(created.id)
     }
 
     /// Fetches an issue by its repository-local number.

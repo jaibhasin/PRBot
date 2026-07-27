@@ -1,7 +1,7 @@
 use crate::agents::AgentReviewResult;
 use crate::config::ReviewConfig;
 use crate::llm::LlmClient;
-use crate::types::{CandidateFinding, ReviewManifest};
+use crate::types::{AgentRun, AgentStatus, CandidateFinding, ReviewAgent, ReviewManifest};
 use serde::Deserialize;
 
 /// Reviews the changes in a manifest using the legacy precision-first workflow.
@@ -58,17 +58,47 @@ pub async fn review(
             .unwrap_or(trimmed);
         serde_json::from_str::<FindingResponse>(candidate).map_err(Into::into)
     }) {
-        Ok(response) => AgentReviewResult {
-            findings: response.findings,
-            failed_bundles: Vec::new(),
-        },
+        Ok(response) => {
+            let mut findings = response.findings;
+            for finding in &mut findings {
+                finding.agent = ReviewAgent::Correctness;
+            }
+            let finding_count = findings.len();
+            AgentReviewResult {
+                findings,
+                failed_bundles: Vec::new(),
+                agent_runs: vec![legacy_run(
+                    AgentStatus::Completed,
+                    finding_count,
+                    finding_count,
+                )],
+                router_fallback: false,
+            }
+        }
         Err(error) => {
             eprintln!("legacy review failed: {error:#}");
             AgentReviewResult {
                 findings: Vec::new(),
                 failed_bundles: vec!["legacy-review".to_owned()],
+                agent_runs: vec![legacy_run(AgentStatus::Failed, 0, 0)],
+                router_fallback: false,
             }
         }
+    }
+}
+
+fn legacy_run(
+    status: AgentStatus,
+    candidate_findings: usize,
+    accepted_findings: usize,
+) -> AgentRun {
+    AgentRun {
+        agent: ReviewAgent::Correctness,
+        status,
+        bundle_ids: vec!["legacy-review".to_owned()],
+        rationale: "Legacy rollback reviewer.".to_owned(),
+        candidate_findings,
+        accepted_findings,
     }
 }
 

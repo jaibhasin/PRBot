@@ -1,0 +1,4 @@
+{"case_id":"security-authz-bypass","priority":"P0","expected_agents":["security"],"actual_agents":["security"]}
+{"case_id":"architecture-config-contract","priority":"P1","expected_agents":["architecture","documentation"],"actual_agents":["architecture","documentation"]}
+{"case_id":"negative-internal-rename","priority":"P2","expected_agents":[],"actual_agents":[]}
+{"case_id":"negative-agents-md","priority":"P2","expected_agents":[],"actual_agents":[]}

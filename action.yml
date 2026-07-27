@@ -12,7 +12,7 @@ inputs:
     required: false
     default: ""
   github_token:
-    description: "GitHub token with permission to read the PR and post comments. If omitted, the workflow job token (GITHUB_TOKEN) is used."
+    description: "GitHub token with pull request write and checks write permissions. If omitted, the workflow job token (GITHUB_TOKEN) is used."
     required: false
     default: ""
   pr_number:
@@ -24,7 +24,7 @@ inputs:
     required: false
     default: "false"
   review_model:
-    description: "OpenRouter model used by review and audit agents."
+    description: "OpenRouter model used by routing and specialist review agents."
     required: false
     default: "deepseek/deepseek-v4-flash"
   verification_model:
@@ -44,7 +44,7 @@ inputs:
     required: false
     default: "3.00"
   max_concurrency:
-    description: "Maximum number of concurrent review bundles."
+    description: "Maximum number of concurrent model calls."
     required: false
     default: "8"
   max_comments:
