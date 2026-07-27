@@ -129,12 +129,22 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
         ))
     });
 
-    // A command from an authorized owner has been accepted. Acknowledge it before
-    // preparing repository context or making any model calls so the author gets
-    // immediate feedback. The reaction is intentionally best-effort: failure to
-    // add it must not prevent PRBot from carrying out the requested command.
-    if let Some(comment_id) = comment_id.filter(|_| !dry_run && !eval_json) {
-        let _ = github.create_reaction(comment_id, "eyes").await;
+    // A command from an authorized owner has been accepted. Select and add an
+    // acknowledgement before preparing repository context or starting command work.
+    if let (Some(comment_id), Some(api_key), Some(budget)) = (
+        comment_id.filter(|_| !dry_run && !eval_json),
+        args.openrouter_api_key.as_deref(),
+        budget.as_ref(),
+    ) {
+        commands::acknowledge_command(
+            &github,
+            comment_id,
+            &command,
+            api_key,
+            &config,
+            Arc::clone(budget),
+        )
+        .await;
     }
 
     let comments = github.list_issue_comments(pr_number).await?;

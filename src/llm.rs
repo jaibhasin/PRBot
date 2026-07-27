@@ -114,7 +114,9 @@ impl LlmClient {
             json!({"role":"user","content":user}),
         ];
         for _ in 0..max_steps {
-            let response = self.completion(model, &messages, &tools).await?;
+            let response = self
+                .completion(model, &messages, &tools, MAX_OUTPUT_TOKENS)
+                .await?;
             let message = response
                 .choices
                 .into_iter()
@@ -140,6 +142,35 @@ impl LlmClient {
             }
         }
         bail!("model exceeded the maximum repository tool steps")
+    }
+
+    /// Requests a short text response without exposing repository tools.
+    ///
+    /// This is used for bounded classification tasks such as choosing a GitHub
+    /// reaction before PRBot begins a longer command.
+    pub async fn respond(
+        &self,
+        model: &str,
+        system: &str,
+        user: &str,
+        max_output_tokens: u64,
+    ) -> Result<String> {
+        let messages = [
+            json!({"role":"system","content":system}),
+            json!({"role":"user","content":user}),
+        ];
+        let response = self
+            .completion(model, &messages, &[], max_output_tokens)
+            .await?;
+        response
+            .choices
+            .into_iter()
+            .next()
+            .context("OpenRouter response contained no choices")?
+            .message
+            .content
+            .filter(|value| !value.trim().is_empty())
+            .context("model returned no content")
     }
 
     /// Sends a chat completion request and records any reported usage against the shared budget.
@@ -172,6 +203,7 @@ impl LlmClient {
         model: &str,
         messages: &[Value],
         tools: &[Value],
+        max_output_tokens: u64,
     ) -> Result<ChatCompletionResponse> {
         let _permit = self
             .semaphore
@@ -182,7 +214,7 @@ impl LlmClient {
             serde_json::to_string(messages).context("failed to measure model request")?;
         let estimated_input = estimate_tokens(&serialized);
         self.budget
-            .reserve(estimated_input, MAX_OUTPUT_TOKENS)
+            .reserve(estimated_input, max_output_tokens)
             .await?;
         let remaining = self.budget.remaining_time()?;
         let request = ChatCompletionRequest {
@@ -190,7 +222,7 @@ impl LlmClient {
             messages,
             tools,
             tool_choice: if tools.is_empty() { None } else { Some("auto") },
-            max_tokens: MAX_OUTPUT_TOKENS,
+            max_tokens: max_output_tokens,
             temperature: 0.0,
         };
 
