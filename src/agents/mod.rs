@@ -8,7 +8,8 @@ mod verifier;
 use crate::config::ReviewConfig;
 use crate::llm::LlmClient;
 use crate::repository::{
-    execute_bounded_for_agent, render_repo_map, tool_definitions, RepositoryTools,
+    execute_bounded_for_agent, is_agent_instructions, render_repo_map, tool_definitions,
+    RepositoryTools,
 };
 use crate::types::{
     AgentRun, AgentStatus, CandidateFinding, ReviewAgent, ReviewBundle, ReviewManifest,
@@ -151,6 +152,12 @@ fn parse_findings(raw: &str, agent: ReviewAgent) -> Result<Vec<CandidateFinding>
                 && !finding.anchor.trim().is_empty()
                 && !finding.title.trim().is_empty()
                 && !finding.body.trim().is_empty()
+                && !(agent == ReviewAgent::Documentation
+                    && (is_agent_instructions(&finding.path)
+                        || finding
+                            .evidence
+                            .iter()
+                            .any(|span| is_agent_instructions(&span.path))))
         })
         .map(|mut finding| {
             finding.agent = agent;
@@ -187,5 +194,15 @@ mod tests {
         let findings = parse_findings(raw, ReviewAgent::Security).expect("parse");
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].agent, ReviewAgent::Security);
+    }
+
+    #[test]
+    fn rejects_documentation_findings_that_target_agent_instructions() {
+        let raw = r#"{"findings":[
+            {"path":"AGENTS.md","side":"RIGHT","anchor":"rule","priority":"P2","category":"documentation","title":"Update instructions","body":"Change AGENTS.md.","evidence":[],"confidence":0.9},
+            {"path":"src/a.rs","side":"RIGHT","anchor":"x","priority":"P2","category":"documentation","title":"Update instructions","body":"Change AGENTS.md.","evidence":[{"path":"nested/AGENTS.md","revision":"head","explanation":"target"}],"confidence":0.9}
+        ]}"#;
+        let findings = parse_findings(raw, ReviewAgent::Documentation).expect("parse");
+        assert!(findings.is_empty());
     }
 }

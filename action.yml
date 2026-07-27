@@ -12,7 +12,7 @@ inputs:
     required: false
     default: ""
   github_token:
-    description: "GitHub token with permission to read the PR and post comments. If omitted, the workflow job token (GITHUB_TOKEN) is used."
+    description: "GitHub token with pull request write and checks write permissions. If omitted, the workflow job token (GITHUB_TOKEN) is used."
     required: false
     default: ""
   pr_number:

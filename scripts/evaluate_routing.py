@@ -53,7 +53,10 @@ def score(cases):
         "critical_recall": ratio(critical_matched, critical_expected),
     }
     metrics["passes"] = (
-        metrics["precision"] >= 0.90
+        len(cases) > 0
+        and expected_count > 0
+        and critical_expected > 0
+        and metrics["precision"] >= 0.90
         and metrics["recall"] >= 0.95
         and metrics["critical_recall"] == 1.0
     )

@@ -65,8 +65,9 @@ async fn routes_reviews_and_verifies_findings_end_to_end() {
 #[tokio::test]
 async fn verifier_failure_marks_review_coverage_incomplete() {
     let (address, server) = mock_server(vec![
-        r#"{"assignments":[]}"#,
+        r#"{"assignments":[{"agent":"architecture","bundle_ids":["bundle"],"rationale":"public contract changed"}]}"#,
         r#"{"findings":[{"path":"src/lib.rs","side":"RIGHT","anchor":"pub fn value() -> i32 { 2 }","priority":"P1","category":"correctness","title":"Changed result","body":"Existing callers require one.","evidence":[],"confidence":0.95}]}"#,
+        r#"{"findings":[]}"#,
         "not-json",
     ]);
     let fixture = RepositoryFixture::new();
@@ -97,7 +98,7 @@ async fn verifier_failure_marks_review_coverage_incomplete() {
         .find(|run| run.agent == ReviewAgent::Correctness)
         .expect("correctness");
     assert_eq!(correctness.candidate_findings, 1);
-    assert_eq!(server.join().expect("server").len(), 3);
+    assert_eq!(server.join().expect("server").len(), 4);
 }
 
 fn manifest() -> ReviewManifest {

@@ -56,6 +56,9 @@ pub async fn route(
 
 fn parse_routing(raw: &str, bundles: &[ReviewBundle]) -> Result<Vec<RoutingAssignment>> {
     let response: RoutingResponse = parse_json(raw).context("parse specialist routing")?;
+    if response.assignments.is_empty() {
+        bail!("router returned no specialist assignments");
+    }
     let bundle_by_id = bundles
         .iter()
         .map(|bundle| (bundle.id.as_str(), bundle))
@@ -88,7 +91,7 @@ fn parse_routing(raw: &str, bundles: &[ReviewBundle]) -> Result<Vec<RoutingAssig
         }
         entry.1.push(assignment.rationale.trim().to_owned());
     }
-    Ok(merged
+    let assignments = merged
         .into_iter()
         .filter_map(|(agent, (bundle_ids, rationales))| {
             if bundle_ids.is_empty() {
@@ -100,7 +103,11 @@ fn parse_routing(raw: &str, bundles: &[ReviewBundle]) -> Result<Vec<RoutingAssig
                 rationale: rationales.join("; "),
             })
         })
-        .collect())
+        .collect::<Vec<_>>();
+    if assignments.is_empty() {
+        bail!("router returned no usable specialist assignments");
+    }
+    Ok(assignments)
 }
 
 fn fallback_assignments(bundles: &[ReviewBundle]) -> Vec<RoutingAssignment> {
@@ -197,6 +204,11 @@ mod tests {
     }
 
     #[test]
+    fn rejects_empty_specialist_assignments() {
+        assert!(parse_routing(r#"{"assignments":[]}"#, &bundles()).is_err());
+    }
+
+    #[test]
     fn fallback_runs_every_specialist() {
         let assignments = fallback_assignments(&bundles());
         assert_eq!(assignments.len(), ReviewAgent::SPECIALISTS.len());
@@ -216,8 +228,7 @@ mod tests {
             related_files: Vec::new(),
         });
         let raw = r#"{"assignments":[{"agent":"documentation","bundle_ids":["instructions"],"rationale":"instructions changed"}]}"#;
-        let assignments = parse_routing(raw, &candidates).expect("routing");
-        assert!(assignments.is_empty());
+        assert!(parse_routing(raw, &candidates).is_err());
     }
 
     #[tokio::test]

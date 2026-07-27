@@ -6,7 +6,7 @@ use crate::github::{CheckConclusion, GitHubClient, IssueComment, PullRequest, Re
 use crate::llm::{Budget, LlmClient};
 use crate::reporting::{
     deduplicate, finding_body, parse_summary_state, render_review_body, render_summary,
-    resolve_findings, SUMMARY_MARKER,
+    resolve_findings, SummaryState, SUMMARY_MARKER,
 };
 use crate::repository::{GitRepository, RepositoryTools};
 use crate::types::{DiffSide, RunOutcome, RunStatus};
@@ -96,32 +96,47 @@ pub async fn run_review(
             .and_then(|comment| parse_summary_state(&comment.body))
             .unwrap_or_default()
     };
-    if !eval_mode {
-        for comment in github.list_review_comments(pr_number).await? {
-            if let Some(fingerprint) = finding_marker(&comment.body) {
-                state.fingerprints.insert(fingerprint);
-            }
+    if !eval_mode
+        && state.reviewed_sha == pull_request.head.sha
+        && !requires_full_recovery(&state, eval_mode)
+    {
+        let check_exists =
+            has_completed_review_check(&github.list_check_runs(&pull_request.head.sha).await?);
+        if !check_exists {
+            let (conclusion, title) = review_check_result(
+                state.coverage_complete.unwrap_or(false),
+                state.blocking_findings(),
+            );
+            github
+                .create_review_check(
+                    &pull_request.head.sha,
+                    conclusion,
+                    &title,
+                    previous_comment
+                        .map(|comment| comment.body.as_str())
+                        .unwrap_or("Recovered persisted PRBot review result."),
+                )
+                .await?;
         }
-        if state.reviewed_sha == pull_request.head.sha {
-            if let Some(command_id) = command_id {
-                github
-                    .create_issue_comment(
-                        pr_number,
-                        &format!(
+        if let Some(command_id) = command_id {
+            github
+                .create_issue_comment(
+                    pr_number,
+                    &format!(
                             "<!-- prbot-command:{command_id} -->\nPRBot already reviewed `{}`. Push a new commit before requesting another review.",
                             pull_request.head.sha
                         ),
-                    )
-                    .await?;
-            } else {
-                println!("PRBot already reviewed head {}", pull_request.head.sha);
-            }
-            return Ok(ReviewResult::Complete);
+                )
+                .await?;
+        } else {
+            println!("PRBot already reviewed head {}", pull_request.head.sha);
         }
+        return Ok(ReviewResult::Complete);
     }
 
     let previous_sha = state.reviewed_sha.clone();
     let incremental = !eval_mode && !previous_sha.is_empty();
+    let recovery_full_review = requires_full_recovery(&state, eval_mode);
     let changed_paths = if incremental {
         repository
             .changed_paths_between(&previous_sha, &pull_request.head.sha)
@@ -131,13 +146,18 @@ pub async fn run_review(
     } else {
         BTreeSet::new()
     };
-    let selected_bundles = if incremental {
+    let affected_bundles = if incremental {
         let selected = select_bundles_for_paths(manifest, &changed_paths);
         let invalidate = related_paths_for_bundles(&selected);
         state.forget_paths(&invalidate);
         selected
     } else {
+        Vec::new()
+    };
+    let selected_bundles = if recovery_full_review || !incremental {
         manifest.bundles.clone()
+    } else {
+        affected_bundles
     };
     if incremental {
         println!(
@@ -181,7 +201,7 @@ pub async fn run_review(
 
     let agents::AgentReviewResult {
         findings,
-        failed_bundles,
+        mut failed_bundles,
         agent_runs,
         router_fallback,
     } = result;
@@ -190,12 +210,11 @@ pub async fn run_review(
     let resolved_count = resolved.len();
     let new_findings = deduplicate(resolved, &state.fingerprints);
     let duplicate_count = resolved_count.saturating_sub(new_findings.len());
-    for finding in &new_findings {
-        state.remember_finding(finding);
+    let (publish, overflow) =
+        select_publishable_findings(&mut state, new_findings, config.max_comments);
+    if overflow > 0 {
+        failed_bundles.push(format!("comment-limit-overflow ({overflow} unpublished)"));
     }
-    let mut publish = new_findings;
-    let overflow = publish.len().saturating_sub(config.max_comments);
-    publish.truncate(config.max_comments);
 
     let current = github.get_pull_request(pr_number).await?;
     if current.head.sha != pull_request.head.sha {
@@ -215,9 +234,10 @@ pub async fn run_review(
     if let Some(command_id) = command_id {
         state.handled_comment_ids.insert(command_id);
     }
-    state.version = 2;
+    state.version = 3;
     state.reviewed_sha = pull_request.head.sha.clone();
     let coverage_complete = manifest.complete() && failed_bundles.is_empty() && unanchored == 0;
+    state.coverage_complete = Some(coverage_complete);
     let status = if selected_bundles.is_empty() && incremental {
         RunStatus::Skipped
     } else if !failed_bundles.is_empty() && publish.is_empty() && !coverage_complete {
@@ -280,22 +300,9 @@ pub async fn run_review(
     } else {
         github.create_issue_comment(pr_number, &summary).await?;
     }
-    let blocking_findings = state.blocking_findings();
-    let check_failed = !coverage_complete || blocking_findings > 0;
-    let (conclusion, title) = if check_failed {
-        (
-            CheckConclusion::Failure,
-            if coverage_complete {
-                format!("PRBot found {} required change(s)", blocking_findings)
-            } else {
-                "PRBot review incomplete".to_owned()
-            },
-        )
-    } else {
-        (CheckConclusion::Success, "PRBot review passed".to_owned())
-    };
+    let (conclusion, title) = review_check_result(coverage_complete, state.blocking_findings());
     github
-        .create_review_check(&pull_request.head.sha, conclusion, &title, &review_body)
+        .create_review_check(&pull_request.head.sha, conclusion, &title, &summary)
         .await?;
     if let Some(command_id) = command_id {
         let _ = github.create_reaction(command_id, "eyes").await;
@@ -348,54 +355,49 @@ fn review_comment(finding: &crate::types::ResolvedFinding) -> ReviewInputComment
     }
 }
 
-/// Extracts the finding fingerprint from a PRBot finding marker.
-///
-/// # Examples
-///
-/// ```
-/// assert_eq!(
-///     finding_marker("Issue details <!-- prbot:finding:abc123 -->"),
-///     Some("abc123".to_owned())
-/// );
-/// assert_eq!(finding_marker("Issue details"), None);
-/// ```
-fn finding_marker(body: &str) -> Option<String> {
-    let prefix = "<!-- prbot:finding:";
-    let start = body.find(prefix)? + prefix.len();
-    let rest = &body[start..];
-    let end = rest.find(" -->")?;
-    Some(rest[..end].to_owned())
+/// Retains only findings that can be published and records those as active.
+fn select_publishable_findings(
+    state: &mut SummaryState,
+    mut findings: Vec<crate::types::ResolvedFinding>,
+    max_comments: usize,
+) -> (Vec<crate::types::ResolvedFinding>, usize) {
+    let overflow = findings.len().saturating_sub(max_comments);
+    findings.truncate(max_comments);
+    for finding in &findings {
+        state.remember_finding(finding);
+    }
+    (findings, overflow)
+}
+
+fn has_completed_review_check(checks: &[crate::github::CheckRun]) -> bool {
+    checks
+        .iter()
+        .any(|check| check.name == "PRBot review" && check.status == "completed")
+}
+
+fn requires_full_recovery(state: &SummaryState, eval_mode: bool) -> bool {
+    !eval_mode && !state.reviewed_sha.is_empty() && state.coverage_complete != Some(true)
+}
+
+fn review_check_result(
+    coverage_complete: bool,
+    blocking_findings: usize,
+) -> (CheckConclusion, String) {
+    if !coverage_complete {
+        return (
+            CheckConclusion::Failure,
+            "PRBot review incomplete".to_owned(),
+        );
+    }
+    if blocking_findings > 0 {
+        return (
+            CheckConclusion::Failure,
+            format!("PRBot found {blocking_findings} required change(s)"),
+        );
+    }
+    (CheckConclusion::Success, "PRBot review passed".to_owned())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::{CandidateFinding, FindingCategory, Priority, ResolvedFinding};
-
-    #[test]
-    fn file_level_comments_use_subject_type() {
-        let finding = ResolvedFinding {
-            candidate: CandidateFinding {
-                agent: crate::types::ReviewAgent::Correctness,
-                path: "src/main.rs".to_owned(),
-                side: DiffSide::Right,
-                anchor: "ambiguous".to_owned(),
-                end_anchor: None,
-                priority: Priority::P1,
-                category: FindingCategory::Correctness,
-                title: "Bug".to_owned(),
-                body: "Impact".to_owned(),
-                evidence: Vec::new(),
-                confidence: 0.9,
-            },
-            line: None,
-            start_line: None,
-            side: DiffSide::Right,
-            fingerprint: "fp".to_owned(),
-            file_level: true,
-        };
-        let comment = review_comment(&finding);
-        assert_eq!(comment.subject_type.as_deref(), Some("file"));
-        assert!(comment.line.is_none());
-    }
-}
+#[path = "contextual_tests.rs"]
+mod tests;
