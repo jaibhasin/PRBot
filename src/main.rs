@@ -36,6 +36,7 @@ enum Commands {
 /// assert_eq!(command, "prbot version");
 /// # }
 /// ```
+#[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 

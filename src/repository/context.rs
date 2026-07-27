@@ -251,7 +251,6 @@ fn build_bundles(manifest: &ReviewManifest) -> Vec<ReviewBundle> {
 /// assert!(matches!(risk_for("src/util.rs", ""), RiskLevel::Low));
 /// ```
 fn risk_for(path: &str, patch: &str) -> RiskLevel {
-fn risk_for(path: &str, patch: &str) -> RiskLevel {
     let text = format!(
         "{} {}",
         path.to_ascii_lowercase(),
@@ -333,7 +332,6 @@ fn source_signals(path: &str, source: &str) -> SourceSignals {
 /// assert_eq!(paths, vec!["src/lib.rs"]);
 /// ```
 fn paths_from_grep(sha: &str, matches: &str) -> Vec<String> {
-fn paths_from_grep(sha: &str, matches: &str) -> Vec<String> {
     matches
         .lines()
         .filter_map(|line| line.strip_prefix(&format!("{sha}:")))
@@ -369,7 +367,6 @@ fn normalized_stem(path: &str) -> String {
 /// assert!(import_matches_path("crate::utils::parser", "src/parser.rs"));
 /// assert!(!import_matches_path("crate::utils::parser", "src/reader.rs"));
 /// ```
-fn import_matches_path import? Wait output must docstring only, no function. Include comments only. They specifically only docstrings. Need no fn. Also perhaps example private issue irrelevant. `import_matches_path` in doctest unresolved, but examples convention may expect unit test and function likely module private. Could demonstrate? Requirement easiest way use function, use actual call. final comments. Ensure summary not Returns. For bool @returns not Rust convention; Rustdoc use Returns section? Guidelines asks documentation requirements but Rust syntax no @returns. We can state behavior summary and example. Better one-line plus details? "Checks whether..." direct. No returns section needed? Rustdoc conventions can say "Returns..." but summary restriction says summary not start Returns. Could include `# Returns` perhaps redundant. concise. Since bool outcome documented in summary? Summary says determines whether. Fine. Description exact normalization perhaps implementation detail? Observable relevant. Example. Use `use`? inaccessible. They explicitly function's doc inserted before fn, doctest can access? Rust doctest perhaps code is compiled with `extern crate`, private not accessible. Yet requested examples. Could mark ` ```rust,ignore` but unit test requirement means no. Existing expected likely comments.
 fn import_matches_path(import: &str, path: &str) -> bool {
     let normalized = import.replace("::", "/").replace('.', "/");
     let stem = Path::new(path)
@@ -413,7 +410,6 @@ fn add_score(
 /// ```
 ///
 /// The resulting string contains at most `max_chars` Unicode characters.
-ಿನ್ನೆ
 fn truncate(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }

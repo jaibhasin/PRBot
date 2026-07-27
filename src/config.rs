@@ -32,7 +32,6 @@ impl Default for ReviewConfig {
     /// assert_eq!(config.max_comments, 12);
     /// assert!(config.auto_review_owner_authored);
     /// ```
-    fn default() -> Self
     fn default() -> Self {
         Self {
             review_model: DEFAULT_REVIEW_MODEL.to_owned(),
@@ -73,7 +72,6 @@ impl ReviewEngine {
     /// # Errors
     ///
     /// Returns an error when the value is not `contextual` or `legacy`.
-    pub fn parse(value: &str) -> Result<Self>
     pub fn parse(value: &str) -> Result<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "contextual" => Ok(Self::Contextual),
@@ -266,7 +264,6 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
 /// let patterns = vec!["src/**/*.rs".to_string()];
 /// assert!(validate_globs(&patterns).is_ok());
 /// ```
-fn validate_globs(patterns: &[String]) -> Result<()> {
 fn validate_globs(patterns: &[String]) -> Result<()> {
     build_globset(patterns).map(|_| ())
 }

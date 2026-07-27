@@ -12,69 +12,37 @@ pub struct PreparedSnapshot {
 }
 
 /// Prepares the repository, review manifest, and rendered pull request context.
-
 ///
-
 /// When enabled, trusted repository configuration and instructions are merged into
-
 /// `config`. The configuration is updated with any trusted settings loaded during
-
 /// preparation.
-
 ///
-
 /// # Examples
-
 ///
-
 /// ```no_run
-
 /// # async fn example(
-
 /// #     github: &GitHubClient,
-
 /// #     pull_request: &PullRequest,
-
 /// #     config: &mut ReviewConfig,
-
 /// # ) -> anyhow::Result<()> {
-
 /// let snapshot = prepare_snapshot(
-
 ///     github,
-
 ///     "owner/repository",
-
 ///     "token",
-
 ///     pull_request.number,
-
 ///     pull_request,
-
 ///     config,
-
 ///     true,
-
 /// ).await?;
-
 ///
-
 /// println!("{}", snapshot.pr_context);
-
 /// # Ok(())
-
 /// # }
-
 /// ```
-
 ///
-
 /// # Errors
-
 ///
-
 /// Returns an error if fetching the repository or building its review context
-
 /// fails.
 pub async fn prepare_snapshot(
     github: &GitHubClient,
@@ -190,10 +158,6 @@ pub fn apply_trusted_repository_config(
 /// assert!(issue.is_some());
 /// ```
 pub async fn fetch_linked_issue(
-github: &GitHubClient,
-pull_request: &PullRequest,
-) -> Option<Issue>
-pub async fn fetch_linked_issue(
     github: &GitHubClient,
     pull_request: &PullRequest,
 ) -> Option<Issue> {
@@ -273,23 +237,14 @@ pub fn render_pr_context(
 }
 
 /// Limits a string to a specified number of characters.
-
 ///
-
 /// # Examples
-
 ///
-
 /// ```
-
 /// assert_eq!(truncate("Hello, world!", 5), "Hello");
-
 /// assert_eq!(truncate("こんにちは", 3), "こんに");
-
 /// ```
-
 ///
-
 /// The limit is applied by Unicode scalar values rather than bytes.
 fn truncate(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()

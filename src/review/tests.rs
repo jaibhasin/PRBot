@@ -29,25 +29,15 @@ fn verifier_must_use_a_different_provider_family() {
 }
 
 /// Builds review arguments for a repository pull request using the specified GitHub API endpoint.
-
 ///
-
 /// # Examples
-
 ///
-
 /// ```
-
 /// let review_args = args("http://127.0.0.1:8080");
-
 /// assert_eq!(
-
 ///     review_args.github_api_url.as_deref(),
-
 ///     Some("http://127.0.0.1:8080")
-
 /// );
-
 /// ```
 fn args(base_url: &str) -> ReviewArgs {
     ReviewArgs {

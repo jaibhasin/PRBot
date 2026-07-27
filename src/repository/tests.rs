@@ -165,31 +165,18 @@ fn git(path: &Path, args: &[&str]) {
 }
 
 /// Runs a Git command in the specified directory and returns its standard output.
-
 ///
-
 /// # Panics
-
 ///
-
 /// Panics if Git cannot be executed, exits unsuccessfully, or produces invalid UTF-8.
-
 ///
-
 /// # Examples
-
 ///
-
 /// ```
-
 /// use std::path::Path;
-
 ///
-
 /// let version = output(Path::new("."), &["--version"]);
-
 /// assert!(version.contains("git version"));
-
 /// ```
 fn output(path: &Path, args: &[&str]) -> String {
     let output = Command::new("git")

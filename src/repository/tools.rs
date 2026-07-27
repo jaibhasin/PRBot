@@ -7,35 +7,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Executes a repository tool with a 10-second time limit.
-
 ///
-
 /// # Examples
-
 ///
-
 /// ```
-
 /// # async fn example(tools: std::sync::Arc<RepositoryTools>) -> anyhow::Result<()> {
-
 /// let result = execute_bounded(tools, "list_tree".into(), "{}".into()).await?;
-
 /// let _output: String = result;
-
 /// # Ok(())
-
 /// # }
-
 /// ```
-
 ///
-
 /// # Errors
-
 ///
-
 /// Returns an error if the tool exceeds the time limit, its task fails, or the
-
 /// tool execution fails.
 pub async fn execute_bounded(
     tools: Arc<RepositoryTools>,
@@ -124,7 +109,6 @@ impl RepositoryTools {
     ///
     /// Returns an error if the arguments are invalid, the repository tree cannot be
     /// read, or the result cannot be serialized.
-    fn list_tree(&self, arguments: &str) -> Result<String>
     fn list_tree(&self, arguments: &str) -> Result<String> {
         #[derive(Deserialize)]
         struct Args {
@@ -302,7 +286,6 @@ impl RepositoryTools {
 /// let definitions = tool_definitions();
 /// assert_eq!(definitions.len(), 7);
 /// ```
-pub fn tool_definitions() -> Vec<Value>
 pub fn tool_definitions() -> Vec<Value> {
     vec![
         tool(
@@ -425,7 +408,6 @@ fn parse<T: for<'de> Deserialize<'de>>(arguments: &str) -> Result<T> {
 /// assert_eq!(truncate("hello", 3), "hel\n...[truncated]");
 /// assert_eq!(truncate("hello", 10), "hello");
 /// ```
-fn truncate(value: &str, max_chars: usize) -> String
 fn truncate(value: &str, max_chars: usize) -> String {
     let mut output = value.chars().take(max_chars).collect::<String>();
     if output.chars().count() < value.chars().count() {

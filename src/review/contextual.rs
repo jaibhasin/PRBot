@@ -299,7 +299,6 @@ fn review_comment(finding: &crate::types::ResolvedFinding) -> ReviewInputComment
 /// );
 /// assert_eq!(finding_marker("Issue details"), None);
 /// ```
-fn finding_marker(body: &str) -> Option<String>
 fn finding_marker(body: &str) -> Option<String> {
     let prefix = "<!-- prbot:finding:";
     let start = body.find(prefix)? + prefix.len();

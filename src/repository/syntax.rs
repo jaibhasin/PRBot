@@ -19,7 +19,6 @@ const MAX_SYMBOLS_PER_FILE: usize = 24;
 /// `path` identifies the source language used for parsing, and `source` contains
 /// the source code to analyze.
 pub fn symbols_for(path: &str, source: &str) -> Vec<String> {
-pub fn symbols_for(path: &str, source: &str) -> Vec<String> {
     language_for(path)
         .and_then(|language| syntax_symbols(language, source, true))
         .filter(|symbols| !symbols.is_empty())
@@ -28,25 +27,15 @@ pub fn symbols_for(path: &str, source: &str) -> Vec<String> {
 }
 
 /// Extracts definition names from source code using the file's language when supported.
-
 ///
-
 /// Falls back to heuristic extraction when the file type is unsupported or parsing fails.
-
 /// The result contains at most 24 sorted, unique names.
-
 ///
-
 /// # Examples
-
 ///
-
 /// ```
-
 /// let names = definitions_for("main.rs", "fn calculate(value: i32) {}");
-
 /// assert!(names.contains(&"calculate".to_string()));
-
 /// ```
 pub fn definitions_for(path: &str, source: &str) -> Vec<String> {
     language_for(path)

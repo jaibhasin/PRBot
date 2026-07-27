@@ -44,6 +44,7 @@ use std::sync::Arc;
 /// # Ok(())
 /// # }
 /// ```
+#[allow(clippy::too_many_arguments)]
 pub async fn answer_command(
     github: &GitHubClient,
     api_key: &str,

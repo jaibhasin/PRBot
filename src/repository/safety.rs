@@ -2,27 +2,16 @@ use anyhow::{bail, Result};
 use std::path::{Component, Path};
 
 /// Validates a Git reference for safe use.
-
 ///
-
 /// A valid reference is nonempty, does not start with `-`, does not contain
-
 /// `..` or whitespace, and contains only ASCII letters, digits, `/`, `.`, `_`,
-
 /// or `-`.
-
 ///
-
 /// # Examples
-
 ///
-
 /// ```
-
 /// assert!(validate_ref("feature/safe-name").is_ok());
-
 /// assert!(validate_ref("../unsafe").is_err());
-
 /// ```
 pub fn validate_ref(value: &str) -> Result<()> {
     if value.is_empty()

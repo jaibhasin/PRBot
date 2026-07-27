@@ -191,7 +191,6 @@ pub fn parse_summary_state(body: &str) -> Option<SummaryState> {
 /// assert!(body.starts_with("<!-- prbot:finding:"));
 /// # }
 /// ```
-pub fn finding_body(finding: &ResolvedFinding) -> String
 pub fn finding_body(finding: &ResolvedFinding) -> String {
     let evidence = if finding.candidate.evidence.is_empty() {
         String::new()

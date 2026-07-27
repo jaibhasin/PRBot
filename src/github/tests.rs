@@ -154,7 +154,6 @@ async fn treats_non_collaborator_not_found_as_unauthorized() {
 /// assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
 /// assert!(response.ends_with(r#"{"ok":true}"#));
 /// ```
-fn response(body: &str, link: Option<&str>) -> String
 fn response(body: &str, link: Option<&str>) -> String {
     let link = link
         .map(|value| format!("Link: {value}\r\n"))

@@ -123,7 +123,6 @@ pub fn resolve_invocation(event: Option<&EventPayload>) -> Invocation {
 /// Returns an error when the explicit value is invalid, no event is available,
 /// or the event does not contain a pull request number.
 pub fn resolve_pr_number(explicit: Option<&str>, event: Option<&EventPayload>) -> Result<u64> {
-pub fn resolve_pr_number(explicit: Option<&str>, event: Option<&EventPayload>) -> Result<u64> {
     if let Some(raw) = explicit.filter(|value| !value.trim().is_empty()) {
         return raw
             .trim()

@@ -218,7 +218,6 @@ impl GitRepository {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn output_args
     pub fn output_args(&self, args: &[String], operation: &str) -> Result<String> {
         let output = Command::new("git")
             .arg("--git-dir")
@@ -246,7 +245,6 @@ impl GitRepository {
     /// # Errors
     ///
     /// Returns an error if the path or revision is invalid, the file cannot be read, or its content is not valid UTF-8.
-    pub fn read_file(&self, revision: &str, path: &str, max_bytes: usize) -> Result<String> {
     pub fn read_file(&self, revision: &str, path: &str, max_bytes: usize) -> Result<String> {
         validate_path(path)?;
         let sha = self.revision_sha(revision)?;
@@ -663,7 +661,7 @@ fn merge_base(
 /// let git_dir = std::path::Path::new("/path/to/repository.git");
 /// run_git_dir(git_dir, ["status"], None, "check repository")?;
 /// # Ok::<(), anyhow::Error>(())
-/// ```///
+/// ```
 ///
 /// `auth` supplies the GitHub HTTP authentication header when provided.
 fn run_git_dir<const N: usize>(
@@ -724,7 +722,6 @@ fn output_git<const N: usize>(git_dir: &Path, args: [&str; N], operation: &str) 
 /// ```
 ///
 /// `operation` identifies the command in any returned error.
-fn run_plain(command: &mut Command, operation: &str) -> Result<()>
 fn run_plain(command: &mut Command, operation: &str) -> Result<()> {
     let output = command
         .output()
@@ -733,35 +730,20 @@ fn run_plain(command: &mut Command, operation: &str) -> Result<()> {
 }
 
 /// Parses a completed command's output as UTF-8 text, reporting failures with the operation context.
-
 ///
-
 /// # Examples
-
 ///
-
 /// ```
-
 /// let output = std::process::Command::new("printf")
-
 ///     .arg("ok")
-
 ///     .output()
-
 ///     .unwrap();
-
 /// let text = parse_output(output, "read output").unwrap();
-
 /// assert_eq!(text, "ok");
-
 /// ```
-
 ///
-
 /// # Errors
-
 ///
-
 /// Returns an error when the command fails or its standard output is not valid UTF-8.
 fn parse_output(output: Output, operation: &str) -> Result<String> {
     if !output.status.success() {

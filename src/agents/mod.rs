@@ -43,7 +43,6 @@ pub async fn review_manifest(
 /// assert!(result.failed_bundles.is_empty());
 /// ```
 pub async fn review_bundles(
-pub async fn review_bundles(
     client: &LlmClient,
     tools: Arc<RepositoryTools>,
     manifest: &ReviewManifest,

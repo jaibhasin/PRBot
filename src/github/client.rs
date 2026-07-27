@@ -62,11 +62,6 @@ impl GitHubClient {
     /// Returns an error if `repository` is not in the `owner/repository` format or
     /// if the HTTP client cannot be built.
     pub fn with_base_url(
-    token: impl Into<String>,
-    repository: &str,
-    base_url: impl Into<String>,
-    ) -> Result<Self>
-    pub fn with_base_url(
         token: impl Into<String>,
         repository: &str,
         base_url: impl Into<String>,
@@ -164,7 +159,6 @@ impl GitHubClient {
     /// # Returns
     ///
     /// The pull request's review comments.
-    אמ
     /// # Examples
     ///
     /// ```
@@ -237,7 +231,6 @@ impl GitHubClient {
     /// # Returns
     ///
     /// The requested [`Issue`].
-    pub async fn get_issue ...
     pub async fn get_issue(&self, number: u64) -> Result<Issue> {
         self.get_json(&format!("issues/{number}"), "get linked issue")
             .await
@@ -570,7 +563,6 @@ impl GitHubClient {
 ///     Some("https://api.example.com/items?page=2".to_owned())
 /// );
 /// ```
-pub(super) fn next_link(header: &str) -> Option<String>
 pub(super) fn next_link(header: &str) -> Option<String> {
     header.split(',').find_map(|part| {
         let mut sections = part.trim().split(';');
