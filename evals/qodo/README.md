@@ -36,4 +36,5 @@ Override with `PRBOT_EVAL_REVIEW_WORKERS`, `PRBOT_MAX_CONCURRENCY`, and `PRBOT_E
 
 - Smoke runs do not update the scoreboard.
 - Matching requires overlapping file and line locations.
+- Category and compliance breakdowns report recall only.
 - Compare revisions using the same batch ID.

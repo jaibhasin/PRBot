@@ -7,8 +7,10 @@ import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -18,6 +20,7 @@ import common  # noqa: E402
 import judge_results  # noqa: E402
 import judge_scoring  # noqa: E402
 import run_prbot_batch  # noqa: E402
+import update_scoreboard  # noqa: E402
 
 
 class CommonTests(unittest.TestCase):
@@ -34,6 +37,16 @@ class CommonTests(unittest.TestCase):
             common.stable_hash({"a": 1, "b": 2}),
             common.stable_hash({"b": 2, "a": 1}),
         )
+
+    def test_openrouter_rejects_missing_choices(self):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"error":"moderated"}'
+        with (
+            patch.dict(os.environ, {"OPENROUTER_API_KEY": "key"}),
+            patch.object(common.urllib.request, "urlopen", return_value=response),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "missing choices"):
+                common.openrouter_chat("model", "system", "user")
 
 
 class CategorizeTests(unittest.TestCase):
@@ -125,6 +138,30 @@ class CategorizeTests(unittest.TestCase):
                 5,
             )
 
+    def test_failed_categorization_does_not_claim_output_was_written(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            common.write_jsonl(target / "ground_truth.jsonl", [self.case()])
+            arguments = [
+                "categorize_gt.py",
+                "--batch-id",
+                "batch-test",
+            ]
+            stdout = StringIO()
+            with (
+                patch.object(categorize_gt, "batch_dir", return_value=target),
+                patch.object(sys, "argv", arguments),
+                patch.object(
+                    categorize_gt,
+                    "categorize_case",
+                    side_effect=RuntimeError("failed"),
+                ),
+                redirect_stdout(stdout),
+            ):
+                self.assertEqual(categorize_gt.main(), 1)
+            self.assertFalse((target / "categorized.jsonl").exists())
+            self.assertNotIn("wrote", stdout.getvalue())
+
 
 class JudgeTests(unittest.TestCase):
     def test_location_gate_requires_same_path_and_overlap(self):
@@ -180,6 +217,40 @@ class JudgeTests(unittest.TestCase):
         self.assertIsNone(metrics["precision"])
         self.assertEqual(metrics["recall"], 0.0)
         self.assertIsNone(metrics["f1"])
+
+    def test_category_metrics_are_recall_only(self):
+        metrics = judge_scoring.recall_for_issues(
+            [{"index": 0}, {"index": 1}],
+            [{"issue_index": 1}],
+        )
+        self.assertEqual(metrics["recall"], 0.5)
+        self.assertNotIn("precision", metrics)
+        self.assertNotIn("published_total", metrics)
+
+    def test_summary_defaults_missing_category_to_zero(self):
+        first = judge_scoring.metric_counts(1, 1, 1)
+        second = judge_scoring.metric_counts(1, 1, 0)
+        rows = [
+            {
+                **first,
+                "by_category": {
+                    "functional": judge_scoring.recall_for_totals(1, 1)
+                },
+                "compliance": judge_scoring.recall_for_totals(0, 0),
+                "prbot_error": None,
+            },
+            {
+                **second,
+                "by_category": {
+                    "style": judge_scoring.recall_for_totals(1, 0)
+                },
+                "compliance": judge_scoring.recall_for_totals(0, 0),
+                "prbot_error": None,
+            },
+        ]
+        summary = judge_scoring.summarize(rows)
+        self.assertEqual(summary["by_category"]["functional"]["recall"], 1.0)
+        self.assertEqual(summary["by_category"]["style"]["recall"], 0.0)
 
     def test_judge_case_derives_consistent_metrics(self):
         categorized = {
@@ -369,6 +440,57 @@ class ReviewOutputTests(unittest.TestCase):
                 [row["case_id"] for row in rows],
                 [case["case_id"] for case in cases],
             )
+
+
+class ScoreboardTests(unittest.TestCase):
+    def test_outdated_scoreboard_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            progress = Path(directory)
+            scoreboard = progress / "SCOREBOARD.md"
+            original = "# Qodo scoreboard\n\nold history\n"
+            scoreboard.write_text(original, encoding="utf-8")
+            with (
+                patch.object(update_scoreboard, "PROGRESS_DIR", progress),
+                patch.object(update_scoreboard, "SCOREBOARD", scoreboard),
+            ):
+                with self.assertRaisesRegex(SystemExit, "outdated header"):
+                    update_scoreboard.ensure_scoreboard()
+            self.assertEqual(scoreboard.read_text(encoding="utf-8"), original)
+
+    def test_none_metrics_render_as_not_applicable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "batch-test"
+            target.mkdir()
+            progress = Path(directory) / "progress"
+            progress.mkdir()
+            scoreboard = progress / "SCOREBOARD.md"
+            scoreboard.write_text(update_scoreboard.HEADER, encoding="utf-8")
+            common.write_json(
+                target / "metrics.json",
+                {
+                    "cases": 1,
+                    "ground_truth_total": 0,
+                    "precision": None,
+                    "recall": None,
+                    "f1": None,
+                    "errors": 0,
+                },
+            )
+            arguments = [
+                "update_scoreboard.py",
+                "--batch-id",
+                "batch-test",
+            ]
+            with (
+                patch.object(update_scoreboard, "PROGRESS_DIR", progress),
+                patch.object(update_scoreboard, "SCOREBOARD", scoreboard),
+                patch.object(update_scoreboard, "batch_dir", return_value=target),
+                patch.object(update_scoreboard, "prbot_version", return_value="1.0"),
+                patch.object(update_scoreboard, "prbot_revision", return_value="abc"),
+                patch.object(sys, "argv", arguments),
+            ):
+                self.assertEqual(update_scoreboard.main(), 0)
+            self.assertIn("| N/A | N/A | N/A |", scoreboard.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
