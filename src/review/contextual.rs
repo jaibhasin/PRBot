@@ -269,9 +269,6 @@ pub async fn run_review(
     } else {
         github.create_issue_comment(pr_number, &summary).await?;
     }
-    if let Some(command_id) = command_id {
-        let _ = github.create_reaction(command_id, "eyes").await;
-    }
     println!(
         "PRBot completed review: findings={} file_level={} coverage={}/{}",
         publish.len(),
