@@ -87,6 +87,7 @@ fn args(base_url: &str) -> ReviewArgs {
         engine: "contextual".to_owned(),
         dry_run: false,
         eval_json: false,
+        step_log: false,
     }
 }
 

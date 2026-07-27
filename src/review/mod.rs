@@ -49,8 +49,12 @@ pub struct ReviewArgs {
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
     /// Run a local evaluation review: skip owner auth, never write to GitHub, print JSON findings.
-    #[arg(long, env = "PRBOT_EVAL_JSON", default_value_t = false)]
+    /// Environment control lives in `run` so `1`/`yes` are accepted alongside `true`.
+    #[arg(long, default_value_t = false)]
     pub eval_json: bool,
+    /// Print mid-review step progress to stderr (also via PRBOT_STEP_LOG=1).
+    #[arg(long, default_value_t = false)]
+    pub step_log: bool,
 }
 
 /// Runs a pull-request review or interactive PRBot command for the configured event.
@@ -73,6 +77,7 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
     let token = required(args.github_token.as_deref(), "GITHUB_TOKEN")?.to_owned();
     let eval_json = args.eval_json || env_flag("PRBOT_EVAL_JSON");
     let dry_run = args.dry_run || env_flag("PRBOT_DRY_RUN");
+    crate::progress::configure(args.step_log || env_flag("PRBOT_STEP_LOG"));
     let event = event::read_event_payload()?;
     let pr_number = event::resolve_pr_number(args.pr_number.as_deref(), event.as_ref())?;
     let github = if let Some(base_url) = &args.github_api_url {

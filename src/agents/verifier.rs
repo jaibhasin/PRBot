@@ -1,6 +1,6 @@
 use super::{parse_json, prompts};
 use crate::config::ReviewConfig;
-use crate::llm::LlmClient;
+use crate::llm::{AgentCall, LlmClient};
 use crate::repository::{execute_bounded, tool_definitions, RepositoryTools};
 use crate::types::{CandidateFinding, Priority, ReviewManifest};
 use anyhow::Result;
@@ -21,11 +21,14 @@ pub(super) async fn verify_findings(
     let tool_runner = Arc::clone(&tools);
     let raw = client
         .run_agent(
-            &config.verification_model,
-            prompts::verifier_system(),
-            &prompt,
-            tool_definitions(),
-            8,
+            AgentCall {
+                model: &config.verification_model,
+                system: prompts::verifier_system(),
+                user: &prompt,
+                tools: tool_definitions(),
+                max_steps: 8,
+                label: "verifier",
+            },
             move |name, arguments| {
                 let tools = Arc::clone(&tool_runner);
                 async move { execute_bounded(tools, name, arguments).await }

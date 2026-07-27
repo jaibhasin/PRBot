@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Run PRBot
-        uses: jaibhasin/PRBot@v0.2.0
+        uses: jaibhasin/PRBot@v1.0.0
         with:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}

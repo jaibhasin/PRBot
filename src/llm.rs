@@ -15,6 +15,23 @@ use budget::Usage;
 const DEFAULT_OPENROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const MAX_OUTPUT_TOKENS: u64 = 6_000;
 
+/// One bounded agent invocation: the model, its prompts, the tools it may call,
+/// and how many model/tool rounds it gets.
+pub struct AgentCall<'a> {
+    /// OpenRouter model slug.
+    pub model: &'a str,
+    /// System prompt establishing the agent's role and output contract.
+    pub system: &'a str,
+    /// Initial user prompt, including the exact JSON schema the agent must return.
+    pub user: &'a str,
+    /// Tool definitions offered to the model.
+    pub tools: Vec<Value>,
+    /// Maximum number of model and tool-execution iterations.
+    pub max_steps: usize,
+    /// Short name used in step logs, for example `primary` or `verifier`.
+    pub label: &'a str,
+}
+
 #[derive(Clone)]
 pub struct LlmClient {
     client: reqwest::Client,
@@ -69,8 +86,7 @@ impl LlmClient {
     ///
     /// # Arguments
     ///
-    /// * `tools` — Tool definitions supplied to the model.
-    /// * `max_steps` — Maximum number of model and tool-execution iterations.
+    /// * `run` — Model, prompts, tools, step ceiling, and step-log label for this agent.
     /// * `execute_tool` — Callback that executes a tool by name with its arguments.
     ///
     /// # Examples
@@ -79,11 +95,14 @@ impl LlmClient {
     /// # async fn example(client: &LlmClient) -> anyhow::Result<()> {
     /// let result = client
     ///     .run_agent(
-    ///         "model",
-    ///         "You are helpful.",
-    ///         "Say hello.",
-    ///         Vec::new(),
-    ///         3,
+    ///         AgentCall {
+    ///             model: "model",
+    ///             system: "You are helpful.",
+    ///             user: "Say hello.",
+    ///             tools: Vec::new(),
+    ///             max_steps: 3,
+    ///             label: "example",
+    ///         },
     ///         |_name, _arguments| async { Ok::<_, anyhow::Error>("done".to_owned()) },
     ///     )
     ///     .await?;
@@ -96,26 +115,67 @@ impl LlmClient {
     /// # Returns
     ///
     /// The model's non-empty final response content.
-    pub async fn run_agent<F, Fut>(
-        &self,
-        model: &str,
-        system: &str,
-        user: &str,
-        tools: Vec<Value>,
-        max_steps: usize,
-        execute_tool: F,
-    ) -> Result<String>
+    pub async fn run_agent<F, Fut>(&self, call: AgentCall<'_>, execute_tool: F) -> Result<String>
     where
         F: Fn(String, String) -> Fut,
         Fut: Future<Output = Result<String>>,
     {
+        let AgentCall {
+            model,
+            system,
+            user,
+            tools,
+            max_steps,
+            label,
+        } = call;
         let mut messages = vec![
             json!({"role":"system","content":system}),
             json!({"role":"user","content":user}),
         ];
-        for _ in 0..max_steps {
+        crate::progress::step(format!(
+            "{label}: start model={model} max_steps={max_steps}"
+        ));
+        let empty_tools: Vec<Value> = Vec::new();
+        for step in 0..max_steps {
+            let serialized =
+                serde_json::to_string(&messages).context("failed to measure agent messages")?;
+            let estimated_input = estimate_tokens(&serialized);
+            let remaining_input = self.budget.remaining_input_tokens().await;
+            let remaining_after = remaining_input.saturating_sub(estimated_input);
+            // Finalize on the last step, or earlier once another tool round would likely
+            // blow the cumulative input-token budget. Never skip tools on step 0 unless
+            // it is also the final step.
+            let force_finalize = step + 1 >= max_steps
+                || (step > 0 && remaining_after < estimated_input.saturating_add(2_000));
+            let step_tools = if force_finalize {
+                empty_tools.as_slice()
+            } else {
+                tools.as_slice()
+            };
+            let snapshot = self.budget.snapshot().await;
+            if force_finalize {
+                crate::progress::step(format!(
+                    "{label}: step {}/{} finalize budget_in={} remaining_in={}",
+                    step + 1,
+                    max_steps,
+                    snapshot.input_tokens,
+                    remaining_input
+                ));
+                messages.push(json!({
+                    "role": "user",
+                    "content": "Stop using tools. Using only the evidence already gathered, reply now with the final answer in exactly the JSON schema requested in the first user message. Output JSON only."
+                }));
+            } else {
+                crate::progress::step(format!(
+                    "{label}: step {}/{} calling model budget_in={} remaining_in={}",
+                    step + 1,
+                    max_steps,
+                    snapshot.input_tokens,
+                    remaining_input
+                ));
+            }
             let response = self
-                .completion(model, &messages, &tools, MAX_OUTPUT_TOKENS)
+                .completion(model, &messages, step_tools, MAX_OUTPUT_TOKENS)
                 .await?;
             let message = response
                 .choices
@@ -123,12 +183,29 @@ impl LlmClient {
                 .next()
                 .context("OpenRouter response contained no choices")?
                 .message;
-            if message.tool_calls.is_empty() {
+            if message.tool_calls.is_empty() || force_finalize {
+                let content_len = message.content.as_ref().map(|c| c.len()).unwrap_or(0);
+                crate::progress::step(format!(
+                    "{label}: step {}/{} finished content_chars={content_len}",
+                    step + 1,
+                    max_steps
+                ));
                 return message
                     .content
                     .filter(|value| !value.trim().is_empty())
                     .context("model returned neither tool calls nor content");
             }
+            let tool_names = message
+                .tool_calls
+                .iter()
+                .map(|call| call.function.name.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            crate::progress::step(format!(
+                "{label}: step {}/{} tool_calls={tool_names}",
+                step + 1,
+                max_steps
+            ));
             messages.push(serde_json::to_value(&message).context("serialize assistant message")?);
             for call in message.tool_calls {
                 let result = execute_tool(call.function.name.clone(), call.function.arguments)
@@ -371,11 +448,14 @@ mod tests {
             .expect("client");
         let result = client
             .run_agent(
-                "provider/reviewer",
-                "system",
-                "user",
-                vec![json!({"type":"function","function":{"name":"read_file","parameters":{"type":"object"}}})],
-                2,
+                AgentCall {
+                    model: "provider/reviewer",
+                    system: "system",
+                    user: "user",
+                    tools: vec![json!({"type":"function","function":{"name":"read_file","parameters":{"type":"object"}}})],
+                    max_steps: 2,
+                    label: "test",
+                },
                 |name, _arguments| async move {
                     assert_eq!(name, "read_file");
                     Ok("file contents".to_owned())
@@ -387,6 +467,78 @@ mod tests {
         let requests = server.join().expect("server");
         assert!(requests[1].contains("tool_call_id"));
         assert!(requests[1].contains("file contents"));
+    }
+
+    #[tokio::test]
+    async fn finalizes_before_input_token_budget_is_exhausted() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let tool_body = r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"src/main.rs\"}"}}]}}],"usage":{"prompt_tokens":80,"completion_tokens":8,"cost":0.001}}"#;
+        let final_body = r#"{"choices":[{"message":{"role":"assistant","content":"{\"findings\":[]}","tool_calls":[]}}],"usage":{"prompt_tokens":90,"completion_tokens":6,"cost":0.001}}"#;
+        let server = thread::spawn(move || {
+            let mut saw_finalize = false;
+            let mut request_count = 0_usize;
+            // Accept a few requests; stop after finalize response.
+            for _ in 0..8 {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let request = read_request(&mut stream);
+                request_count += 1;
+                let finalize = request.contains("Stop using tools");
+                saw_finalize |= finalize;
+                let body = if finalize { final_body } else { tool_body };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).expect("write");
+                if finalize {
+                    break;
+                }
+            }
+            (saw_finalize, request_count)
+        });
+
+        // Tight cumulative input budget: endless tool looping would exhaust it.
+        let budget = Arc::new(Budget::new(1, 350, 10.0));
+        let client = LlmClient::new(
+            "key",
+            Some(format!("http://{address}/chat")),
+            budget.clone(),
+            1,
+        )
+        .expect("client");
+        let result = client
+            .run_agent(
+                AgentCall {
+                    model: "provider/reviewer",
+                    system: "system",
+                    user: "user",
+                    tools: vec![json!({"type":"function","function":{"name":"read_file","parameters":{"type":"object"}}})],
+                    max_steps: 12,
+                    label: "test",
+                },
+                |_name, _arguments| async move {
+                    Ok("x".repeat(400))
+                },
+            )
+            .await
+            .expect("agent should finalize instead of exhausting input budget");
+        assert_eq!(result, "{\"findings\":[]}");
+        let snapshot = budget.snapshot().await;
+        assert!(
+            snapshot.input_tokens <= 350,
+            "used {} input tokens",
+            snapshot.input_tokens
+        );
+        let (saw_finalize, request_count) = server.join().expect("server");
+        assert!(saw_finalize, "expected a no-tools finalize turn");
+        assert!(request_count >= 2, "expected tool use then finalize");
+        assert!(
+            request_count < 12,
+            "should finalize before burning all steps"
+        );
     }
 
     fn read_request(stream: &mut TcpStream) -> String {

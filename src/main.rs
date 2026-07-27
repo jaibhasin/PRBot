@@ -5,6 +5,7 @@ mod agents;
 mod config;
 mod github;
 mod llm;
+mod progress;
 mod reporting;
 mod repository;
 mod review;

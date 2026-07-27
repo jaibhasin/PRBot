@@ -33,6 +33,9 @@ Legacy rows without a fingerprint are recomputed.
 Concurrency defaults: 3 PRs, 4 internal calls per PR, and 4 categorization or judging workers.
 Override with `PRBOT_EVAL_REVIEW_WORKERS`, `PRBOT_MAX_CONCURRENCY`, and `PRBOT_EVAL_META_WORKERS`.
 
+Step logs: evals enable `PRBOT_STEP_LOG=1` by default so mid-review progress prints to stderr.
+Disable with `PRBOT_STEP_LOG=0`. Outside evals, pass `--step-log` or set `PRBOT_STEP_LOG=1`.
+
 ## Outputs
 
 `batches/batch-NNN/`: `selection.json`, `ground_truth.jsonl`, `categorized.jsonl`, `prbot_output.jsonl`, `judged.jsonl`, `metrics.json`, `run_metadata.json`, `SUMMARY.md`

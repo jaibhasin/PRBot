@@ -1,6 +1,6 @@
 use crate::agents::AgentReviewResult;
 use crate::config::ReviewConfig;
-use crate::llm::LlmClient;
+use crate::llm::{AgentCall, LlmClient};
 use crate::types::{AgentRun, AgentStatus, CandidateFinding, ReviewAgent, ReviewManifest};
 use serde::Deserialize;
 
@@ -42,11 +42,14 @@ pub async fn review(
     );
     let response = client
         .run_agent(
-            &config.review_model,
-            "You are the legacy precision-first PR reviewer. Return JSON only.",
-            &prompt,
-            Vec::new(),
-            1,
+            AgentCall {
+                model: &config.review_model,
+                system: "You are the legacy precision-first PR reviewer. Return JSON only.",
+                user: &prompt,
+                tools: Vec::new(),
+                max_steps: 1,
+                label: "legacy",
+            },
             |_name, _arguments| async { unreachable!("legacy engine has no tools") },
         )
         .await;

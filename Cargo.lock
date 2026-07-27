@@ -753,7 +753,7 @@ dependencies = [
 
 [[package]]
 name = "prbot"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64",

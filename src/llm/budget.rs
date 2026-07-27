@@ -143,6 +143,12 @@ impl Budget {
             elapsed_seconds: self.started.elapsed().as_secs(),
         }
     }
+
+    /// Remaining input-token capacity before the hard budget limit.
+    pub async fn remaining_input_tokens(&self) -> u64 {
+        let state = self.state.lock().await;
+        self.max_input_tokens.saturating_sub(state.input_tokens)
+    }
 }
 
 #[derive(Deserialize)]

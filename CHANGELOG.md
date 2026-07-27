@@ -3,6 +3,25 @@
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-28
+
+### Added
+- Routed specialist review agents with sectioned GitHub review publishing and check results
+- Immediate owner-command acknowledgement with review-model reaction selection
+- Qodo PR-Review-Bench harness under `evals/qodo/` with parallel resumable runs and scoreboard tracking
+- `prbot review --eval-json` mode for local benchmark runs without GitHub writes
+
+### Changed
+- Default review and verification models are both `deepseek/deepseek-v4-flash`
+- Same model/provider is allowed for review and verification
+- Review flow simplified around a primary verifier path
+- README installation guide made more concise
+
+### Fixed
+- Review state and routing recovery hardening
+- PRBot command acknowledgement retries
+- Eval harness matching, scoring, resume cache fingerprints, and failed-outcome rejection
+
 ## [0.2.0] - 2026-07-27
 
 ### Added
@@ -13,13 +32,9 @@
 - `ReviewRun` plus `skipped`/`failed` run outcome statuses
 - Richer specialist roles for API, concurrency, and performance signals
 - 50-case evaluation fixture catalog skeleton under `evals/fixtures/`
-- Qodo PR-Review-Bench harness under `evals/qodo/` with batch scoreboard tracking
-- `prbot review --eval-json` mode for local benchmark runs without GitHub writes
 
 ### Changed
 - Default review engine is now `contextual`; `legacy` remains available as a rollback
-- Default review and verification models are both `deepseek/deepseek-v4-flash`
-- Same model/provider is allowed for review and verification
 - Summary comments report incremental mode and reviewed bundle counts
 - Fingerprints for changed paths are cleared on incremental reruns so findings can be revalidated
 

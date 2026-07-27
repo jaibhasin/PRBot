@@ -4,7 +4,7 @@ mod prompts;
 mod verifier;
 
 use crate::config::ReviewConfig;
-use crate::llm::LlmClient;
+use crate::llm::{AgentCall, LlmClient};
 use crate::repository::{
     execute_bounded_for_reviewer, is_agent_instructions, render_repo_map, tool_definitions,
     RepositoryTools,
@@ -54,16 +54,24 @@ pub async fn review_bundles(
         candidate_findings: 0,
         accepted_findings: 0,
     };
+    crate::progress::step(format!(
+        "primary: reviewing {} bundle(s) model={}",
+        bundles.len(),
+        config.review_model
+    ));
     let prompt =
         prompts::review_prompt(bundles, &manifest.files, &render_repo_map(manifest), config);
     let tool_runner = Arc::clone(&tools);
     let result = client
         .run_agent(
-            &config.review_model,
-            prompts::reviewer_system(),
-            &prompt,
-            tool_definitions(),
-            12,
+            AgentCall {
+                model: &config.review_model,
+                system: prompts::reviewer_system(),
+                user: &prompt,
+                tools: tool_definitions(),
+                max_steps: 6,
+                label: "primary",
+            },
             move |name, arguments| {
                 let tools = Arc::clone(&tool_runner);
                 async move { execute_bounded_for_reviewer(tools, name, arguments).await }
@@ -73,6 +81,10 @@ pub async fn review_bundles(
         .and_then(|raw| parse_findings(&raw));
     let (findings, mut failed_bundles) = match result {
         Ok(findings) => {
+            crate::progress::step(format!(
+                "primary: produced {} candidate finding(s)",
+                findings.len()
+            ));
             run.candidate_findings = findings.len();
             (findings, Vec::new())
         }
@@ -83,9 +95,13 @@ pub async fn review_bundles(
         }
     };
 
+    crate::progress::step(format!("verifier: start candidates={}", findings.len()));
     let verified = match verifier::verify_findings(client, tools, manifest, &findings, config).await
     {
-        Ok(value) => value,
+        Ok(value) => {
+            crate::progress::step(format!("verifier: accepted {} finding(s)", value.len()));
+            value
+        }
         Err(error) => {
             eprintln!("independent verification failed: {error:#}");
             failed_bundles.push("independent-verifier".to_owned());

@@ -74,6 +74,8 @@ def run_one(prbot: Path, case: dict, engine: str, timeout_sec: int) -> dict:
     env["PRBOT_PR_NUMBER"] = str(case["pr_number"])
     env["PRBOT_ENGINE"] = engine
     env["PRBOT_EVAL_JSON"] = "1"
+    # Show mid-review step logs on the eval terminal by default.
+    env.setdefault("PRBOT_STEP_LOG", "1")
     if not env.get("GITHUB_TOKEN"):
         raise SystemExit("GITHUB_TOKEN is required to fetch public PR refs")
     if not env.get("OPENROUTER_API_KEY"):
@@ -91,12 +93,15 @@ def run_one(prbot: Path, case: dict, engine: str, timeout_sec: int) -> dict:
         "--engine",
         engine,
     ]
+    print(f"reviewing {case['case_id']} ...", flush=True)
     try:
+        # Capture stdout for eval JSON; inherit stderr so step logs stream live.
         completed = subprocess.run(
             command,
             cwd=ROOT,
             env=env,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=None,
             text=True,
             timeout=timeout_sec,
             check=False,
@@ -110,7 +115,7 @@ def run_one(prbot: Path, case: dict, engine: str, timeout_sec: int) -> dict:
             "engine": engine,
             "elapsed_seconds": round(time.time() - started, 2),
             "returncode": None,
-            "stderr_tail": tail_text(error.stderr),
+            "stderr_tail": "",
             "stdout_tail": tail_text(error.stdout),
             "error": f"prbot timed out after {timeout_sec} seconds",
         }
@@ -135,7 +140,7 @@ def run_one(prbot: Path, case: dict, engine: str, timeout_sec: int) -> dict:
         "engine": engine,
         "elapsed_seconds": elapsed,
         "returncode": completed.returncode,
-        "stderr_tail": tail_text(completed.stderr),
+        "stderr_tail": "",
     }
     if completed.returncode != 0:
         record["error"] = f"prbot exited {completed.returncode}"
