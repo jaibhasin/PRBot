@@ -195,3 +195,5 @@ src/llm.rs        OpenRouter tool loop, concurrency, and budget ledger
 
 The architecture uses independently implemented patterns inspired by [PR-Agent context management](https://docs.pr-agent.ai/core-abilities/dynamic_context/), [Aider repository maps](https://aider.chat/docs/repomap.html), [OpenCode tools](https://opencode.ai/docs/tools), [Serge](https://huggingface.github.io/serge/), [Alibaba OpenCodeReview](https://github.com/alibaba/open-code-review), [Mira](https://docs.miracode.ai/), and the [Codex GitHub Action](https://github.com/openai/codex-action).
 No source code was copied from those projects.
+
+For the latency, robustness, and quality roadmap based on industry research (CodeRabbit, Bugbot, Greptile, Codex, Cloudflare, Qodo, OpenCode, and related papers), see [`docs/research/VICE_IMPROVEMENT_PLAN.md`](docs/research/VICE_IMPROVEMENT_PLAN.md).

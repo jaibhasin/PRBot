@@ -3,6 +3,9 @@
 
 ## [Unreleased]
 
+### Added
+- Research and roadmap for faster, more robust VICE/PRBot reviews in `docs/research/VICE_IMPROVEMENT_PLAN.md`
+
 ## [0.2.0] - 2026-07-27
 
 ### Added
