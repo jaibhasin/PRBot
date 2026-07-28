@@ -42,8 +42,23 @@ jobs:
       - name: Fixture catalog present
         run: |
           test "$(wc -l < evals/fixtures/catalog.jsonl | tr -d ' ')" = "50"
+          cp evals/fixtures/catalog.jsonl /tmp/catalog-before.jsonl
           python3 scripts/generate_fixture_catalog.py
           test "$(wc -l < evals/fixtures/catalog.jsonl | tr -d ' ')" = "50"
+          # Regenerating must not shrink protected rows if any exist.
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          before = [json.loads(line) for line in Path('/tmp/catalog-before.jsonl').read_text().splitlines() if line.strip()]
+          after = [json.loads(line) for line in Path('evals/fixtures/catalog.jsonl').read_text().splitlines() if line.strip()]
+          protected = {row['case_id'] for row in before if row.get('status') in {'ready','adjudicated','retired'}}
+          after_ids = {row['case_id'] for row in after}
+          missing = protected - after_ids
+          assert not missing, missing
+          PY
+
+      - name: Fixture batch runner help
+        run: python3 scripts/run_fixture_batch.py --help
 
       - name: Build release
         run: cargo build --release
