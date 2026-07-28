@@ -13,6 +13,7 @@ pub(super) async fn verify_findings(
     manifest: &ReviewManifest,
     findings: &[CandidateFinding],
     config: &ReviewConfig,
+    max_steps: usize,
 ) -> Result<Vec<CandidateFinding>> {
     if findings.is_empty() {
         return Ok(Vec::new());
@@ -26,7 +27,7 @@ pub(super) async fn verify_findings(
                 system: prompts::verifier_system(),
                 user: &prompt,
                 tools: tool_definitions(),
-                max_steps: 6,
+                max_steps: max_steps.max(1),
                 temperature: 0.0,
                 label: "verifier",
             },

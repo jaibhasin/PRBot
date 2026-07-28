@@ -46,7 +46,7 @@ async fn primary_reviewer_verifies_findings_end_to_end() {
     assert_eq!(result.agent_runs[0].bundle_ids, ["bundle"]);
     let requests = server.join().expect("server");
     assert_eq!(requests.len(), 2);
-    assert!(requests[0].contains("Review these selected pull-request bundles"));
+    assert!(requests[0].contains("Review these selected pull-request bundles as primary pass"));
     assert!(!requests[0].contains("Route these review bundles"));
     assert!(requests[1].contains("accepted_indices"));
 }

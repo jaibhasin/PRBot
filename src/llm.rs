@@ -18,7 +18,7 @@ const OPENROUTER_MAX_ATTEMPTS: u32 = 3;
 const OPENROUTER_RETRY_BASE: Duration = Duration::from_millis(250);
 const OPENROUTER_RETRY_CAP: Duration = Duration::from_secs(10);
 
-    /// One bounded agent invocation: the model, its prompts, the tools it may call,
+/// One bounded agent invocation: the model, its prompts, the tools it may call,
 /// and how many model/tool rounds it gets.
 pub struct AgentCall<'a> {
     /// OpenRouter model slug.
@@ -81,6 +81,17 @@ impl LlmClient {
             budget,
             semaphore: Arc::new(Semaphore::new(concurrency.max(1))),
         })
+    }
+
+    pub async fn remaining_input_tokens(&self) -> u64 {
+        self.budget.remaining_input_tokens().await
+    }
+
+    pub fn remaining_time_secs(&self) -> u64 {
+        self.budget
+            .remaining_time()
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0)
     }
 
     /// Runs a bounded tool-using conversation and returns the model's final content.
@@ -333,9 +344,7 @@ impl LlmClient {
                 bail!("OpenRouter returned {status}: {body}");
             }
 
-            let wait = retry_after
-                .unwrap_or(delay)
-                .min(OPENROUTER_RETRY_CAP);
+            let wait = retry_after.unwrap_or(delay).min(OPENROUTER_RETRY_CAP);
             let remaining = self.budget.remaining_time().unwrap_or(Duration::ZERO);
             if remaining.is_zero() {
                 bail!("OpenRouter returned {status} with no remaining review time: {body}");

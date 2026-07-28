@@ -21,9 +21,7 @@ impl CollaboratorPermission {
             "admin" => Ok(Self::Admin),
             "maintain" => Ok(Self::Maintain),
             "write" => Ok(Self::Write),
-            other => bail!(
-                "invalid min_permission '{other}', expected admin, maintain, or write"
-            ),
+            other => bail!("invalid min_permission '{other}', expected admin, maintain, or write"),
         }
     }
 
