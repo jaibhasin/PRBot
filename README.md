@@ -48,8 +48,8 @@ After the first publish, set that package visibility to **Public** in the repo P
 
 ## How it works
 
-- PRBot automatically reviews pull requests authored by users with GitHub `admin` permission.
-- Users with GitHub `admin` permission can request a review on any pull request by commenting `/prbot review`.
+- PRBot automatically reviews pull requests authored by collaborators who meet `min_permission` (default: GitHub `admin`).
+- Collaborators who meet `min_permission` can request a review on any pull request by commenting `/prbot review`.
 - It fetches the exact pull request revisions and analyzes them as read-only Git data.
 - It maps related code and tests, reviews the relevant changes, and independently verifies each potential finding.
 - It posts one GitHub review with verified comments and a `PRBot review` check.
@@ -66,9 +66,14 @@ Add a trusted `.prbot.toml` file to narrow review paths or provide repository-sp
 exclude = ["**/generated/**", "**/*.lock"]
 instructions = ["Prioritize user-visible correctness regressions."]
 max_comments = 8
+min_permission = "write"
+primary_passes = 1
 ```
 
-Supported owner commands:
+Set `min_permission` to `write` or `maintain` when ordinary collaborators should be able to trigger reviews.
+The Action default remains `admin` for backward-compatible installs.
+
+Supported commands:
 
 ```text
 /prbot review

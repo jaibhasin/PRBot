@@ -14,6 +14,9 @@ use budget::Usage;
 
 const DEFAULT_OPENROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const MAX_OUTPUT_TOKENS: u64 = 6_000;
+const OPENROUTER_MAX_ATTEMPTS: u32 = 3;
+const OPENROUTER_RETRY_BASE: Duration = Duration::from_millis(250);
+const OPENROUTER_RETRY_CAP: Duration = Duration::from_secs(10);
 
 /// One bounded agent invocation: the model, its prompts, the tools it may call,
 /// and how many model/tool rounds it gets.
@@ -28,6 +31,8 @@ pub struct AgentCall<'a> {
     pub tools: Vec<Value>,
     /// Maximum number of model and tool-execution iterations.
     pub max_steps: usize,
+    /// Sampling temperature for this agent call.
+    pub temperature: f32,
     /// Short name used in step logs, for example `primary` or `verifier`.
     pub label: &'a str,
 }
@@ -78,6 +83,17 @@ impl LlmClient {
         })
     }
 
+    pub async fn remaining_input_tokens(&self) -> u64 {
+        self.budget.remaining_input_tokens().await
+    }
+
+    pub fn remaining_time_secs(&self) -> u64 {
+        self.budget
+            .remaining_time()
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0)
+    }
+
     /// Runs a bounded tool-using conversation and returns the model's final content.
     ///
     /// Tool execution errors are added to the conversation as tool results so the model
@@ -101,6 +117,7 @@ impl LlmClient {
     ///             user: "Say hello.",
     ///             tools: Vec::new(),
     ///             max_steps: 3,
+    ///             temperature: 0.0,
     ///             label: "example",
     ///         },
     ///         |_name, _arguments| async { Ok::<_, anyhow::Error>("done".to_owned()) },
@@ -126,6 +143,7 @@ impl LlmClient {
             user,
             tools,
             max_steps,
+            temperature,
             label,
         } = call;
         let mut messages = vec![
@@ -175,7 +193,7 @@ impl LlmClient {
                 ));
             }
             let response = self
-                .completion(model, &messages, step_tools, MAX_OUTPUT_TOKENS)
+                .completion(model, &messages, step_tools, MAX_OUTPUT_TOKENS, temperature)
                 .await?;
             let message = response
                 .choices
@@ -237,7 +255,7 @@ impl LlmClient {
             json!({"role":"user","content":user}),
         ];
         let response = self
-            .completion(model, &messages, &[], max_output_tokens)
+            .completion(model, &messages, &[], max_output_tokens, 0.0)
             .await?;
         response
             .choices
@@ -252,87 +270,97 @@ impl LlmClient {
 
     /// Sends a chat completion request and records any reported usage against the shared budget.
     ///
-    /// # Arguments
-    ///
-    /// * `model` - The model identifier to request.
-    /// * `messages` - The conversation messages to send.
-    /// * `tools` - The tool definitions available to the model.
-    ///
-    /// # Returns
-    ///
-    /// The parsed chat completion response.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # async fn example(client: &LlmClient) -> anyhow::Result<()> {
-    /// let messages = vec![serde_json::json!({
-    ///     "role": "user",
-    ///     "content": "Hello",
-    /// })];
-    /// let response = client
-    ///     .completion("model-name", &messages, &[], 16)
-    ///     .await?;
-    /// assert!(!response.choices.is_empty());
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Retries transient HTTP 429 and 5xx responses up to three attempts.
+    /// Budget reservation happens once per logical completion, not per retry.
     async fn completion(
         &self,
         model: &str,
         messages: &[Value],
         tools: &[Value],
         max_output_tokens: u64,
+        temperature: f32,
     ) -> Result<ChatCompletionResponse> {
-        let _permit = self
-            .semaphore
-            .acquire()
-            .await
-            .context("LLM concurrency semaphore closed")?;
         let serialized =
             serde_json::to_string(messages).context("failed to measure model request")?;
         let estimated_input = estimate_tokens(&serialized);
         self.budget
             .reserve(estimated_input, max_output_tokens)
             .await?;
-        let remaining = self.budget.remaining_time()?;
         let request = ChatCompletionRequest {
             model,
             messages,
             tools,
             tool_choice: if tools.is_empty() { None } else { Some("auto") },
             max_tokens: max_output_tokens,
-            temperature: 0.0,
+            temperature,
         };
 
-        let response = tokio::time::timeout(
-            remaining,
-            self.client
-                .post(&self.endpoint)
-                .bearer_auth(&self.api_key)
-                .json(&request)
-                .send(),
-        )
-        .await
-        .context("OpenRouter request exceeded review deadline")?
-        .context("failed to call OpenRouter")?;
-        let status = response.status();
-        let body = response
-            .text()
+        let mut delay = OPENROUTER_RETRY_BASE;
+        for attempt in 0..OPENROUTER_MAX_ATTEMPTS {
+            let permit = self
+                .semaphore
+                .acquire()
+                .await
+                .context("LLM concurrency semaphore closed")?;
+            let remaining = self.budget.remaining_time()?;
+            let response = tokio::time::timeout(
+                remaining,
+                self.client
+                    .post(&self.endpoint)
+                    .bearer_auth(&self.api_key)
+                    .json(&request)
+                    .send(),
+            )
             .await
-            .context("failed to read OpenRouter response")?;
-        if !status.is_success() {
-            if status == StatusCode::TOO_MANY_REQUESTS {
-                bail!("OpenRouter rate limit exceeded: {body}");
+            .context("OpenRouter request exceeded review deadline")?
+            .context("failed to call OpenRouter")?;
+            let status = response.status();
+            let retry_after = response
+                .headers()
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(Duration::from_secs);
+            let body = response
+                .text()
+                .await
+                .context("failed to read OpenRouter response")?;
+            drop(permit);
+
+            if status.is_success() {
+                let parsed: ChatCompletionResponse =
+                    serde_json::from_str(&body).context("failed to parse OpenRouter response")?;
+                if let Some(usage) = &parsed.usage {
+                    self.budget.record_usage(usage).await;
+                }
+                return Ok(parsed);
             }
-            bail!("OpenRouter returned {status}: {body}");
+
+            let retryable = status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
+            if !retryable || attempt + 1 == OPENROUTER_MAX_ATTEMPTS {
+                if status == StatusCode::TOO_MANY_REQUESTS {
+                    bail!("OpenRouter rate limit exceeded: {body}");
+                }
+                bail!("OpenRouter returned {status}: {body}");
+            }
+
+            let wait = retry_after.unwrap_or(delay).min(OPENROUTER_RETRY_CAP);
+            let remaining = self.budget.remaining_time().unwrap_or(Duration::ZERO);
+            if remaining.is_zero() {
+                bail!("OpenRouter returned {status} with no remaining review time: {body}");
+            }
+            crate::progress::step(format!(
+                "openrouter: retry attempt={} status={} wait_ms={}",
+                attempt + 1,
+                status.as_u16(),
+                wait.as_millis()
+            ));
+            if !wait.is_zero() {
+                tokio::time::sleep(wait.min(remaining)).await;
+            }
+            delay = (delay * 2).min(OPENROUTER_RETRY_CAP);
         }
-        let parsed: ChatCompletionResponse =
-            serde_json::from_str(&body).context("failed to parse OpenRouter response")?;
-        if let Some(usage) = &parsed.usage {
-            self.budget.record_usage(usage).await;
-        }
-        Ok(parsed)
+        unreachable!("retry loop always returns on final attempt")
     }
 }
 
@@ -454,6 +482,7 @@ mod tests {
                     user: "user",
                     tools: vec![json!({"type":"function","function":{"name":"read_file","parameters":{"type":"object"}}})],
                     max_steps: 2,
+                    temperature: 0.0,
                     label: "test",
                 },
                 |name, _arguments| async move {
@@ -467,6 +496,78 @@ mod tests {
         let requests = server.join().expect("server");
         assert!(requests[1].contains("tool_call_id"));
         assert!(requests[1].contains("file contents"));
+    }
+
+    #[tokio::test]
+    async fn retries_transient_openrouter_failures() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let success = r#"{"choices":[{"message":{"role":"assistant","content":"ok","tool_calls":[]}}],"usage":{"prompt_tokens":4,"completion_tokens":1,"cost":0.001}}"#;
+        let server = thread::spawn(move || {
+            let mut statuses = Vec::new();
+            for (status, body) in [
+                ("429 Too Many Requests", r#"{"error":"rate"}"#),
+                ("503 Service Unavailable", r#"{"error":"busy"}"#),
+                ("200 OK", success),
+            ] {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let _ = read_request(&mut stream);
+                statuses.push(status.to_owned());
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nRetry-After: 0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).expect("write");
+            }
+            statuses
+        });
+        let budget = Arc::new(Budget::new(1, 10_000, 10.0));
+        let client = LlmClient::new(
+            "key",
+            Some(format!("http://{address}/chat")),
+            budget.clone(),
+            1,
+        )
+        .expect("client");
+        let result = client
+            .respond("provider/reviewer", "system", "user", 16)
+            .await
+            .expect("response");
+        assert_eq!(result, "ok");
+        let statuses = server.join().expect("server");
+        assert_eq!(statuses.len(), 3);
+        // Reserve happens once even when HTTP retries.
+        let snapshot = budget.snapshot().await;
+        assert!(snapshot.input_tokens > 0);
+        assert_eq!(snapshot.output_tokens, 1);
+    }
+
+    #[tokio::test]
+    async fn does_not_retry_non_transient_openrouter_failures() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let _ = read_request(&mut stream);
+            let body = r#"{"error":"bad request"}"#;
+            let response = format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+            // A second accept would hang if the client retried.
+            listener.set_nonblocking(true).expect("nonblocking");
+            listener.accept().is_err()
+        });
+        let budget = Arc::new(Budget::new(1, 10_000, 10.0));
+        let client = LlmClient::new("key", Some(format!("http://{address}/chat")), budget, 1)
+            .expect("client");
+        let error = client
+            .respond("provider/reviewer", "system", "user", 16)
+            .await
+            .expect_err("should fail");
+        assert!(error.to_string().contains("400"));
+        assert!(server.join().expect("server"));
     }
 
     #[tokio::test]
@@ -517,6 +618,7 @@ mod tests {
                     user: "user",
                     tools: vec![json!({"type":"function","function":{"name":"read_file","parameters":{"type":"object"}}})],
                     max_steps: 12,
+                    temperature: 0.0,
                     label: "test",
                 },
                 |_name, _arguments| async move {

@@ -309,6 +309,12 @@ pub struct RunOutcome {
     pub findings: usize,
     #[serde(default)]
     pub active_findings: usize,
+    #[serde(default)]
+    pub ever_published_findings: usize,
+    #[serde(default)]
+    pub resolved_findings: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution_rate: Option<f64>,
     pub skipped_findings: usize,
     pub failed_bundles: Vec<String>,
     pub budget: BudgetSnapshot,

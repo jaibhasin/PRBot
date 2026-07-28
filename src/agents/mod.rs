@@ -1,7 +1,12 @@
+mod cluster;
+mod depth;
 #[cfg(test)]
 mod integration_tests;
 mod prompts;
 mod verifier;
+mod walkthrough;
+
+pub use walkthrough::generate_walkthrough;
 
 use crate::config::ReviewConfig;
 use crate::llm::{AgentCall, LlmClient};
@@ -13,6 +18,7 @@ use crate::types::{
     AgentRun, AgentStatus, CandidateFinding, ReviewAgent, ReviewBundle, ReviewManifest,
 };
 use anyhow::{Context, Result};
+use futures::future::join_all;
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -42,6 +48,9 @@ pub async fn review_bundles(
         return empty_result();
     }
 
+    let risk = depth::max_bundle_risk(bundles);
+    let plan = depth::depth_for(risk, config);
+    let pass_plans = prompts::pass_plans(plan.primary_passes);
     let bundle_ids = bundles
         .iter()
         .map(|bundle| bundle.id.clone())
@@ -50,53 +59,110 @@ pub async fn review_bundles(
         agent: ReviewAgent::Primary,
         status: AgentStatus::Completed,
         bundle_ids,
-        rationale: "One precision-first review across every selected bundle.".to_owned(),
+        rationale: format!(
+            "Precision-first review across every selected bundle using {} pass(es) at {:?} risk.",
+            pass_plans.len(),
+            risk
+        ),
         candidate_findings: 0,
         accepted_findings: 0,
     };
     crate::progress::step(format!(
-        "primary: reviewing {} bundle(s) model={}",
+        "primary: reviewing {} bundle(s) passes={} steps={} risk={risk:?} model={}",
         bundles.len(),
+        pass_plans.len(),
+        plan.primary_max_steps,
         config.review_model
     ));
-    let prompt =
-        prompts::review_prompt(bundles, &manifest.files, &render_repo_map(manifest), config);
-    let tool_runner = Arc::clone(&tools);
-    let result = client
-        .run_agent(
-            AgentCall {
-                model: &config.review_model,
-                system: prompts::reviewer_system(),
-                user: &prompt,
-                tools: tool_definitions(),
-                max_steps: 6,
-                label: "primary",
-            },
-            move |name, arguments| {
-                let tools = Arc::clone(&tool_runner);
-                async move { execute_bounded_for_reviewer(tools, name, arguments).await }
-            },
-        )
-        .await
-        .and_then(|raw| parse_findings(&raw));
-    let (findings, mut failed_bundles) = match result {
-        Ok(findings) => {
-            crate::progress::step(format!(
-                "primary: produced {} candidate finding(s)",
-                findings.len()
-            ));
-            run.candidate_findings = findings.len();
-            (findings, Vec::new())
-        }
-        Err(error) => {
-            eprintln!("primary reviewer failed: {error:#}");
-            run.status = AgentStatus::Failed;
-            (Vec::new(), vec!["primary-reviewer".to_owned()])
-        }
-    };
 
-    crate::progress::step(format!("verifier: start candidates={}", findings.len()));
-    let verified = match verifier::verify_findings(client, tools, manifest, &findings, config).await
+    let repo_map = render_repo_map(manifest);
+    let mut pass_futures = Vec::new();
+    for pass in &pass_plans {
+        if client_budget_too_low(client).await {
+            crate::progress::step(format!(
+                "primary: skipping pass {} due to remaining budget",
+                pass.index + 1
+            ));
+            break;
+        }
+        let prompt = prompts::review_prompt(bundles, &manifest.files, &repo_map, config, *pass);
+        let tool_runner = Arc::clone(&tools);
+        let model = config.review_model.clone();
+        let label = format!("primary-pass-{}", pass.index + 1);
+        let temperature = pass.temperature;
+        let max_steps = plan.primary_max_steps;
+        let client = client.clone();
+        pass_futures.push(async move {
+            client
+                .run_agent(
+                    AgentCall {
+                        model: &model,
+                        system: prompts::reviewer_system(),
+                        user: &prompt,
+                        tools: tool_definitions(),
+                        max_steps,
+                        temperature,
+                        label: &label,
+                    },
+                    move |name, arguments| {
+                        let tools = Arc::clone(&tool_runner);
+                        async move { execute_bounded_for_reviewer(tools, name, arguments).await }
+                    },
+                )
+                .await
+                .and_then(|raw| parse_findings(&raw))
+        });
+    }
+
+    let pass_results = join_all(pass_futures).await;
+    let mut pass_findings = Vec::new();
+    let mut any_success = false;
+    for (index, result) in pass_results.into_iter().enumerate() {
+        match result {
+            Ok(findings) => {
+                any_success = true;
+                crate::progress::step(format!(
+                    "primary: pass {} produced {} candidate finding(s)",
+                    index + 1,
+                    findings.len()
+                ));
+                pass_findings.push(findings);
+            }
+            Err(error) => {
+                eprintln!("primary reviewer pass {} failed: {error:#}", index + 1);
+                pass_findings.push(Vec::new());
+            }
+        }
+    }
+
+    let mut failed_bundles = Vec::new();
+    if !any_success {
+        run.status = AgentStatus::Failed;
+        failed_bundles.push("primary-reviewer".to_owned());
+    }
+    let merged = cluster::merge_pass_findings(
+        &pass_findings,
+        config.majority_k,
+        config.keep_high_confidence_singleton,
+        config.max_comments.saturating_mul(3).max(12),
+    );
+    run.candidate_findings = merged.len();
+    crate::progress::step(format!(
+        "primary: merged {} candidate finding(s) from {} pass(es)",
+        merged.len(),
+        pass_findings.len()
+    ));
+
+    crate::progress::step(format!("verifier: start candidates={}", merged.len()));
+    let verified = match verifier::verify_findings(
+        client,
+        tools,
+        manifest,
+        &merged,
+        config,
+        plan.verifier_max_steps,
+    )
+    .await
     {
         Ok(value) => {
             crate::progress::step(format!("verifier: accepted {} finding(s)", value.len()));
@@ -133,6 +199,11 @@ pub fn empty_result() -> AgentReviewResult {
             accepted_findings: 0,
         }],
     }
+}
+
+async fn client_budget_too_low(client: &LlmClient) -> bool {
+    // Heuristic: leave room for at least one completion + verifier.
+    client.remaining_input_tokens().await < 8_000 || client.remaining_time_secs() < 30
 }
 
 fn parse_findings(raw: &str) -> Result<Vec<CandidateFinding>> {

@@ -47,6 +47,14 @@ if [[ -n "${INPUT_MAX_COMMENTS:-}" ]]; then
   export PRBOT_MAX_COMMENTS="${INPUT_MAX_COMMENTS}"
 fi
 
+if [[ -n "${INPUT_PRIMARY_PASSES:-}" ]]; then
+  export PRBOT_PRIMARY_PASSES="${INPUT_PRIMARY_PASSES}"
+fi
+
+if [[ -n "${INPUT_MIN_PERMISSION:-}" ]]; then
+  export PRBOT_MIN_PERMISSION="${INPUT_MIN_PERMISSION}"
+fi
+
 if [[ -n "${INPUT_ENGINE:-}" ]]; then
   export PRBOT_ENGINE="${INPUT_ENGINE}"
 fi

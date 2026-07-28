@@ -5,6 +5,49 @@ use serde::Deserialize;
 pub const DEFAULT_REVIEW_MODEL: &str = "deepseek/deepseek-v4-flash";
 pub const DEFAULT_VERIFICATION_MODEL: &str = "deepseek/deepseek-v4-flash";
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum CollaboratorPermission {
+    Write = 1,
+    Maintain = 2,
+    Admin = 3,
+}
+
+impl CollaboratorPermission {
+    /// Parses a collaborator permission floor.
+    ///
+    /// Accepted values are `admin`, `maintain`, and `write` (case-insensitive).
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "admin" => Ok(Self::Admin),
+            "maintain" => Ok(Self::Maintain),
+            "write" => Ok(Self::Write),
+            other => bail!("invalid min_permission '{other}', expected admin, maintain, or write"),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::Maintain => "maintain",
+            Self::Write => "write",
+        }
+    }
+
+    /// Returns whether a GitHub API permission string meets this floor.
+    pub fn meets(self, actual: &str) -> bool {
+        Self::from_api(actual).is_some_and(|permission| permission >= self)
+    }
+
+    fn from_api(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "admin" => Some(Self::Admin),
+            "maintain" => Some(Self::Maintain),
+            "write" => Some(Self::Write),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ReviewConfig {
     pub review_model: String,
@@ -14,6 +57,13 @@ pub struct ReviewConfig {
     pub max_cost_usd: f64,
     pub max_concurrency: usize,
     pub max_comments: usize,
+    pub primary_passes: usize,
+    pub primary_max_steps: usize,
+    pub verifier_max_steps: usize,
+    pub majority_k: usize,
+    pub keep_high_confidence_singleton: f32,
+    pub enable_walkthrough: bool,
+    pub min_permission: CollaboratorPermission,
     pub engine: ReviewEngine,
     pub auto_review_owner_authored: bool,
     pub include: Vec<String>,
@@ -41,6 +91,13 @@ impl Default for ReviewConfig {
             max_cost_usd: 3.0,
             max_concurrency: 8,
             max_comments: 12,
+            primary_passes: 1,
+            primary_max_steps: 10,
+            verifier_max_steps: 8,
+            majority_k: 2,
+            keep_high_confidence_singleton: 0.92,
+            enable_walkthrough: true,
+            min_permission: CollaboratorPermission::Admin,
             engine: ReviewEngine::Contextual,
             auto_review_owner_authored: true,
             include: vec!["**/*".to_owned()],
@@ -103,6 +160,8 @@ struct RepositoryReviewConfig {
     exclude: Option<Vec<String>>,
     instructions: Option<Vec<String>>,
     max_comments: Option<usize>,
+    min_permission: Option<String>,
+    primary_passes: Option<usize>,
 }
 
 impl ReviewConfig {
@@ -147,6 +206,15 @@ impl ReviewConfig {
         }
         if let Some(max_comments) = parsed.review.max_comments {
             self.max_comments = self.max_comments.min(max_comments);
+        }
+        if let Some(min_permission) = parsed.review.min_permission {
+            self.min_permission = CollaboratorPermission::parse(&min_permission)?;
+        }
+        if let Some(primary_passes) = parsed.review.primary_passes {
+            if primary_passes == 0 || primary_passes > 3 {
+                bail!("invalid primary_passes '{primary_passes}', expected 1..=3");
+            }
+            self.primary_passes = primary_passes;
         }
         for rule in &parsed.path_rules {
             Glob::new(&rule.glob)
@@ -340,6 +408,27 @@ fn default_excludes() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permission_floor_accepts_higher_levels() {
+        assert!(CollaboratorPermission::Write.meets("write"));
+        assert!(CollaboratorPermission::Write.meets("maintain"));
+        assert!(CollaboratorPermission::Write.meets("admin"));
+        assert!(!CollaboratorPermission::Write.meets("read"));
+        assert!(!CollaboratorPermission::Admin.meets("write"));
+        assert!(CollaboratorPermission::parse("WRITE").is_ok());
+        assert!(CollaboratorPermission::parse("triage").is_err());
+    }
+
+    #[test]
+    fn repository_config_can_set_permission_and_passes() {
+        let mut config = ReviewConfig::default();
+        config
+            .apply_repository_toml("[review]\nmin_permission = \"write\"\nprimary_passes = 2\n")
+            .expect("config");
+        assert_eq!(config.min_permission, CollaboratorPermission::Write);
+        assert_eq!(config.primary_passes, 2);
+    }
 
     #[test]
     fn repository_config_can_only_reduce_comment_ceiling() {

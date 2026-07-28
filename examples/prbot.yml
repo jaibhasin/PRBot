@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   review:
-    # PRBot performs the authoritative owner permission check before any LLM call.
+    # PRBot checks collaborator permission before any LLM call (default: admin).
     if: ${{ github.event_name == 'pull_request' || (github.event.issue.pull_request && github.event.sender.type != 'Bot') }}
     runs-on: ubuntu-latest
     steps:

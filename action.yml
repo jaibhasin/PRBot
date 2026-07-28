@@ -51,6 +51,14 @@ inputs:
     description: "Maximum number of verified inline findings published per run."
     required: false
     default: "12"
+  primary_passes:
+    description: "Number of diversified primary review passes (1-3). Default 1."
+    required: false
+    default: "1"
+  min_permission:
+    description: "Minimum collaborator permission for auto-review and /prbot commands (admin, maintain, or write). Default admin."
+    required: false
+    default: "admin"
   engine:
     description: "Review engine: contextual (default) or legacy rollback."
     required: false

@@ -55,7 +55,7 @@ async fn follows_pagination_and_checks_admin_permission() {
     let comments = client.list_issue_comments(1).await.expect("comments");
     assert_eq!(comments.len(), 2);
     assert!(client
-        .is_repository_admin("owner")
+        .has_min_permission("owner", crate::config::CollaboratorPermission::Admin)
         .await
         .expect("permission"));
     server.join().expect("server");
@@ -199,7 +199,7 @@ async fn treats_non_collaborator_not_found_as_unauthorized() {
     let client = GitHubClient::with_base_url("token", "octocat/hello", format!("http://{address}"))
         .expect("client");
     assert!(!client
-        .is_repository_admin("outsider")
+        .has_min_permission("outsider", crate::config::CollaboratorPermission::Admin)
         .await
         .expect("permission"));
     server.join().expect("server");
