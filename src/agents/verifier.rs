@@ -27,6 +27,7 @@ pub(super) async fn verify_findings(
                 user: &prompt,
                 tools: tool_definitions(),
                 max_steps: 6,
+                temperature: 0.0,
                 label: "verifier",
             },
             move |name, arguments| {

@@ -158,6 +158,7 @@ Use repository tools when the answer depends on code. Reply with concise GitHub 
                 user: &prompt,
                 tools: crate::repository::tool_definitions(),
                 max_steps: 12,
+                temperature: 0.0,
                 label: "command",
             },
             move |name, arguments| {

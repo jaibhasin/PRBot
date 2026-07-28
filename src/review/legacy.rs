@@ -48,6 +48,7 @@ pub async fn review(
                 user: &prompt,
                 tools: Vec::new(),
                 max_steps: 1,
+                temperature: 0.0,
                 label: "legacy",
             },
             |_name, _arguments| async { unreachable!("legacy engine has no tools") },

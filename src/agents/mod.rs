@@ -70,6 +70,7 @@ pub async fn review_bundles(
                 user: &prompt,
                 tools: tool_definitions(),
                 max_steps: 6,
+                temperature: 0.0,
                 label: "primary",
             },
             move |name, arguments| {
