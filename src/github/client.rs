@@ -133,7 +133,9 @@ impl GitHubClient {
     /// ```no_run
     /// # async fn example() -> anyhow::Result<()> {
     /// let client = GitHubClient::new("token", "owner/repository")?;
-    /// let is_admin = client.is_repository_admin("octocat").await?;
+    /// let allowed = client
+    ///     .has_min_permission("octocat", crate::config::CollaboratorPermission::Admin)
+    ///     .await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -156,12 +158,6 @@ impl GitHubClient {
         let result: PermissionResponse =
             parse_json(response, "check repository permission").await?;
         Ok(minimum.meets(&result.permission))
-    }
-
-    /// Returns whether `login` has repository admin permission.
-    pub async fn is_repository_admin(&self, login: &str) -> Result<bool> {
-        self.has_min_permission(login, crate::config::CollaboratorPermission::Admin)
-            .await
     }
 
     /// Lists the comments associated with a pull request.

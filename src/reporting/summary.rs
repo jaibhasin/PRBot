@@ -18,6 +18,10 @@ pub struct SummaryState {
     #[serde(default)]
     pub fingerprint_priorities: BTreeMap<String, Priority>,
     #[serde(default)]
+    pub published_fingerprints: BTreeSet<String>,
+    #[serde(default)]
+    pub resolved_fingerprints: BTreeSet<String>,
+    #[serde(default)]
     pub coverage_complete: Option<bool>,
     #[serde(default)]
     pub handled_comment_ids: BTreeSet<u64>,
@@ -26,30 +30,8 @@ pub struct SummaryState {
 impl SummaryState {
     /// Removes remembered findings associated with the specified file paths.
     ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::collections::{BTreeMap, BTreeSet};
-    ///
-    /// let mut state = SummaryState {
-    ///     version: 1,
-    ///     reviewed_sha: String::new(),
-    ///     fingerprints: BTreeSet::from(["fp-a".to_string(), "fp-b".to_string()]),
-    ///     fingerprint_paths: BTreeMap::from([
-    ///         ("fp-a".to_string(), "src/a.rs".to_string()),
-    ///         ("fp-b".to_string(), "src/b.rs".to_string()),
-    ///     ]),
-    ///     fingerprint_related_paths: BTreeMap::new(),
-    ///     handled_comment_ids: BTreeSet::new(),
-    /// };
-    /// let paths = BTreeSet::from(["src/a.rs".to_string()]);
-    ///
-    /// state.forget_paths(&paths);
-    ///
-    /// assert!(!state.fingerprints.contains("fp-a"));
-    /// assert!(state.fingerprints.contains("fp-b"));
-    /// ```
-    pub fn forget_paths(&mut self, paths: &BTreeSet<String>) {
+    /// Returns the fingerprints that were removed from the active set.
+    pub fn forget_paths(&mut self, paths: &BTreeSet<String>) -> BTreeSet<String> {
         let mut stale = self
             .fingerprint_paths
             .iter()
@@ -62,28 +44,21 @@ impl SummaryState {
                 .filter(|(_, related)| !related.is_disjoint(paths))
                 .map(|(fingerprint, _)| fingerprint.clone()),
         );
-        for fingerprint in stale {
-            self.fingerprints.remove(&fingerprint);
-            self.fingerprint_paths.remove(&fingerprint);
-            self.fingerprint_related_paths.remove(&fingerprint);
-            self.fingerprint_priorities.remove(&fingerprint);
+        for fingerprint in &stale {
+            self.fingerprints.remove(fingerprint);
+            self.fingerprint_paths.remove(fingerprint);
+            self.fingerprint_related_paths.remove(fingerprint);
+            self.fingerprint_priorities.remove(fingerprint);
         }
+        stale
     }
 
     /// Records a finding's fingerprint and associates it with the finding's path.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// state.remember_finding(&finding);
-    /// assert!(state.fingerprints.contains(&finding.fingerprint));
-    /// assert_eq!(
-    ///     state.fingerprint_paths.get(&finding.fingerprint),
-    ///     Some(&finding.candidate.path)
-    /// );
-    /// ```
     pub fn remember_finding(&mut self, finding: &ResolvedFinding) {
         self.fingerprints.insert(finding.fingerprint.clone());
+        self.published_fingerprints
+            .insert(finding.fingerprint.clone());
+        self.resolved_fingerprints.remove(&finding.fingerprint);
         self.fingerprint_paths
             .insert(finding.fingerprint.clone(), finding.candidate.path.clone());
         self.fingerprint_related_paths.insert(
@@ -97,6 +72,36 @@ impl SummaryState {
         );
         self.fingerprint_priorities
             .insert(finding.fingerprint.clone(), finding.candidate.priority);
+    }
+
+    /// Marks forgotten fingerprints as resolved when they were not republished.
+    pub fn resolve_forgotten(
+        &mut self,
+        forgotten: &BTreeSet<String>,
+        coverage_complete: bool,
+    ) -> usize {
+        if !coverage_complete {
+            return 0;
+        }
+        let mut resolved = 0;
+        for fingerprint in forgotten {
+            if self.fingerprints.contains(fingerprint) {
+                continue;
+            }
+            if self.published_fingerprints.contains(fingerprint)
+                && self.resolved_fingerprints.insert(fingerprint.clone())
+            {
+                resolved += 1;
+            }
+        }
+        resolved
+    }
+
+    pub fn resolution_rate(&self) -> Option<f64> {
+        if self.published_fingerprints.is_empty() {
+            return None;
+        }
+        Some(self.resolved_fingerprints.len() as f64 / self.published_fingerprints.len() as f64)
     }
 
     pub fn blocking_findings(&self) -> usize {
@@ -142,6 +147,7 @@ impl SummaryState {
 /// # Returns
 ///
 /// A Markdown-formatted review summary containing serialized contextual state.
+#[allow(clippy::too_many_arguments)]
 pub fn render_summary(
     repository: &str,
     pr_number: u64,
@@ -150,6 +156,7 @@ pub fn render_summary(
     state: &SummaryState,
     review_model: &str,
     verification_model: &str,
+    walkthrough: Option<&str>,
 ) -> String {
     let status = match outcome.status {
         RunStatus::Complete if findings.is_empty() => "No verified findings",
@@ -172,8 +179,22 @@ pub fn render_summary(
         .reviewed_bundles
         .map(|count| count.to_string())
         .unwrap_or_else(|| "all".to_owned());
+    let resolution = outcome
+        .resolution_rate
+        .map(|rate| {
+            format!(
+                "{:.0}% ({} resolved / {} published)",
+                rate * 100.0,
+                outcome.resolved_findings,
+                outcome.ever_published_findings
+            )
+        })
+        .unwrap_or_else(|| "n/a".to_owned());
     let encoded = serde_json::to_string(state).unwrap_or_else(|_| "{}".to_owned());
     let agent_sections = render_agent_sections(&outcome.agent_runs);
+    let walkthrough_section = walkthrough
+        .map(|text| format!("{}\n\n", sanitize_model_text(text.trim())))
+        .unwrap_or_default();
     format!(
         "{SUMMARY_MARKER}\n\
 **PRBot contextual review: {status}**\n\n\
@@ -184,11 +205,12 @@ Reviewed bundles: `{reviewed_bundles}`  \n\
 Incremental: `{incremental}`  \n\
 Published findings: `{}`  \n\
 Active unresolved findings: `{}`  \n\
+Resolution rate: `{resolution}`  \n\
 Rejected or unanchored findings: `{}`  \n\
 Failed stages: `{failures}`  \n\
 Models: `{review_model}` reviewer, `{verification_model}` verifier  \n\
 Budget: `{}` input tokens, `{}` output tokens, `${:.4}` estimated, `{}s`\n\n\
-{agent_sections}\n\
+{walkthrough_section}{agent_sections}\n\
 {STATE_PREFIX}{encoded}{STATE_SUFFIX}\n",
         outcome.reviewed_sha,
         outcome.assigned_hunks,

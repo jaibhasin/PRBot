@@ -146,10 +146,11 @@ pub async fn run_review(
     } else {
         BTreeSet::new()
     };
+    let mut forgotten = BTreeSet::new();
     let affected_bundles = if incremental {
         let selected = select_bundles_for_paths(manifest, &changed_paths);
         let invalidate = related_paths_for_bundles(&selected);
-        state.forget_paths(&invalidate);
+        forgotten = state.forget_paths(&invalidate);
         selected
     } else {
         Vec::new()
@@ -233,10 +234,14 @@ pub async fn run_review(
     if let Some(command_id) = command_id {
         state.handled_comment_ids.insert(command_id);
     }
-    state.version = 3;
+    state.version = 4;
     state.reviewed_sha = pull_request.head.sha.clone();
     let coverage_complete = manifest.complete() && failed_bundles.is_empty() && unanchored == 0;
     state.coverage_complete = Some(coverage_complete);
+    state.resolve_forgotten(
+        &forgotten,
+        coverage_complete && !selected_bundles.is_empty(),
+    );
     let status = if selected_bundles.is_empty() && incremental {
         RunStatus::Skipped
     } else if !failed_bundles.is_empty() && publish.is_empty() && !coverage_complete {
@@ -254,6 +259,9 @@ pub async fn run_review(
         assigned_hunks: manifest.assigned_hunks(),
         findings: publish.len(),
         active_findings: state.fingerprints.len(),
+        ever_published_findings: state.published_fingerprints.len(),
+        resolved_findings: state.resolved_fingerprints.len(),
+        resolution_rate: state.resolution_rate(),
         skipped_findings: unanchored + duplicate_count + overflow,
         failed_bundles,
         budget: budget.snapshot().await,
@@ -276,6 +284,17 @@ pub async fn run_review(
             findings: publish,
         }));
     }
+    let walkthrough = agents::generate_walkthrough(
+        &client,
+        &budget,
+        pr_context,
+        manifest,
+        &selected_bundles,
+        &manifest.files,
+        &publish,
+        config,
+    )
+    .await;
     let review_body = render_review_body(&outcome.agent_runs);
     if !publish.is_empty() {
         let input = publish.iter().map(review_comment).collect::<Vec<_>>();
@@ -292,6 +311,7 @@ pub async fn run_review(
         &state,
         &config.review_model,
         &config.verification_model,
+        walkthrough.as_deref(),
     );
     if let Some(comment) = previous_comment {
         github.update_issue_comment(comment.id, &summary).await?;

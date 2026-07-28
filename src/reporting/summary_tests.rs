@@ -12,6 +12,8 @@ fn round_trips_hidden_summary_state() {
         fingerprint_paths: BTreeMap::from([("one".to_owned(), "src/main.rs".to_owned())]),
         fingerprint_related_paths: BTreeMap::new(),
         fingerprint_priorities: BTreeMap::new(),
+        published_fingerprints: BTreeSet::new(),
+        resolved_fingerprints: BTreeSet::new(),
         coverage_complete: None,
         handled_comment_ids: BTreeSet::new(),
     };
@@ -74,6 +76,9 @@ fn partial_run_never_claims_no_verified_findings() {
         assigned_hunks: 1,
         findings: 0,
         active_findings: 0,
+        ever_published_findings: 0,
+        resolved_findings: 0,
+        resolution_rate: None,
         skipped_findings: 0,
         failed_bundles: vec!["bundle-2".to_owned()],
         budget: crate::types::BudgetSnapshot::default(),
@@ -89,9 +94,61 @@ fn partial_run_never_claims_no_verified_findings() {
         &SummaryState::default(),
         "provider/reviewer",
         "other/verifier",
+        None,
     );
     assert!(summary.contains("Partial review"));
     assert!(!summary.contains("No verified findings"));
+}
+
+#[test]
+fn renders_walkthrough_before_precision_review() {
+    let outcome = RunOutcome {
+        status: RunStatus::Complete,
+        reviewed_sha: "abc".to_owned(),
+        coverage_complete: true,
+        eligible_hunks: 1,
+        assigned_hunks: 1,
+        findings: 0,
+        active_findings: 0,
+        ever_published_findings: 0,
+        resolved_findings: 0,
+        resolution_rate: None,
+        skipped_findings: 0,
+        failed_bundles: Vec::new(),
+        budget: crate::types::BudgetSnapshot::default(),
+        incremental: Some(false),
+        reviewed_bundles: Some(1),
+        agent_runs: Vec::new(),
+    };
+    let summary = render_summary(
+        "octocat/hello",
+        1,
+        &outcome,
+        &[],
+        &SummaryState::default(),
+        "provider/reviewer",
+        "other/verifier",
+        Some("## Walkthrough\n\nChanged the parser.\n"),
+    );
+    let walkthrough = summary.find("## Walkthrough").expect("walkthrough");
+    let precision = summary.find("## Precision review").expect("precision");
+    assert!(walkthrough < precision);
+}
+
+#[test]
+fn resolves_forgotten_fingerprints_only_when_coverage_complete() {
+    let mut state = SummaryState::default();
+    state.published_fingerprints.insert("fp-a".to_owned());
+    state.fingerprints.insert("fp-a".to_owned());
+    state
+        .fingerprint_paths
+        .insert("fp-a".to_owned(), "src/a.rs".to_owned());
+    let forgotten = state.forget_paths(&BTreeSet::from(["src/a.rs".to_owned()]));
+    assert_eq!(forgotten, BTreeSet::from(["fp-a".to_owned()]));
+    assert_eq!(state.resolve_forgotten(&forgotten, false), 0);
+    assert_eq!(state.resolve_forgotten(&forgotten, true), 1);
+    assert!(state.resolved_fingerprints.contains("fp-a"));
+    assert!((state.resolution_rate().unwrap() - 1.0).abs() < f64::EPSILON);
 }
 
 #[test]
