@@ -3,6 +3,10 @@
 
 ## [Unreleased]
 
+### Changed
+- Docs and package description align with the live primary reviewer + independent verifier flow
+- Specialist routing remains an eval harness and future option, not the shipped review engine
+
 ## [1.0.2] - 2026-07-28
 
 ### Changed

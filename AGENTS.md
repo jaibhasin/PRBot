@@ -25,7 +25,7 @@ Flow:
 1. A consumer workflow calls this Action.
 2. Docker starts `entrypoint.sh`.
 3. `entrypoint.sh` runs `prbot review`.
-4. The CLI talks to GitHub and OpenRouter, runs multi-agent review, then posts PR feedback.
+4. The CLI talks to GitHub and OpenRouter, runs a primary review plus independent verification, then posts PR feedback.
 
 Important paths:
 
@@ -33,7 +33,7 @@ Important paths:
 - `src/config.rs` - review config, defaults, and `.prbot.toml` loading
 - `src/types.rs` - shared review, finding, and outcome types
 - `src/review/` - review orchestration (args, events, commands, contextual and legacy engines)
-- `src/agents/` - router, specialist tasks, verifier, and prompts
+- `src/agents/` - primary reviewer, verifier, and prompts
 - `src/llm.rs` / `src/llm/` - OpenRouter client and token/cost budgets
 - `src/repository/` - ephemeral Git store, diffs, syntax context, and read-only tools
 - `src/reporting/` - anchors, dedupe, and summary comment rendering

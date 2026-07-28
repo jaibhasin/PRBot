@@ -2,7 +2,7 @@
 name = "prbot"
 version = "1.0.2"
 edition = "2021"
-description = "Open-source multi-agent PR reviewer for GitHub Actions"
+description = "Precision-first PR reviewer for GitHub Actions (primary review + independent verification)"
 license = "MIT"
 repository = "https://github.com/jaibhasin/prbot"
 readme = "README.md"
