@@ -7,7 +7,7 @@ mod review_context;
 #[cfg(test)]
 mod tests;
 
-use crate::config::{ReviewConfig, ReviewEngine};
+use crate::config::{CollaboratorPermission, ReviewConfig, ReviewEngine};
 use crate::github::{GitHubClient, IssueComment};
 use crate::llm::Budget;
 use crate::reporting::{parse_summary_state, SUMMARY_MARKER};
@@ -44,6 +44,10 @@ pub struct ReviewArgs {
     pub max_concurrency: usize,
     #[arg(long, env = "PRBOT_MAX_COMMENTS", default_value_t = 12)]
     pub max_comments: usize,
+    #[arg(long, env = "PRBOT_PRIMARY_PASSES", default_value_t = 1)]
+    pub primary_passes: usize,
+    #[arg(long, env = "PRBOT_MIN_PERMISSION", default_value = "admin")]
+    pub min_permission: String,
     #[arg(long, env = "PRBOT_ENGINE", default_value = "contextual")]
     pub engine: String,
     #[arg(long, default_value_t = false)]
@@ -102,13 +106,15 @@ pub async fn run(args: ReviewArgs) -> Result<()> {
             comment_id,
         } => (actor, command, Some(comment_id)),
     };
-    if !eval_json && !github.is_repository_admin(&actor).await? {
+    let min_permission = CollaboratorPermission::parse(&args.min_permission)?;
+    if !eval_json && !github.has_min_permission(&actor, min_permission).await? {
         if let Some(comment_id) = comment_id {
             github
                 .create_issue_comment(
                     pr_number,
                     &format!(
-                        "<!-- prbot-command:{comment_id} -->\nOnly repository owners can run `/prbot` commands."
+                        "<!-- prbot-command:{comment_id} -->\nOnly collaborators with `{}` permission or higher can run `/prbot` commands.",
+                        min_permission.as_str()
                     ),
                 )
                 .await?;
@@ -346,6 +352,8 @@ fn config_from_args(args: &ReviewArgs) -> Result<ReviewConfig> {
         max_cost_usd: args.max_cost_usd,
         max_concurrency: args.max_concurrency.max(1),
         max_comments: args.max_comments,
+        primary_passes: args.primary_passes.clamp(1, 3),
+        min_permission: CollaboratorPermission::parse(&args.min_permission)?,
         engine: ReviewEngine::parse(&args.engine)?,
         ..ReviewConfig::default()
     };

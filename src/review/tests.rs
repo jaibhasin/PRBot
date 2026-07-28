@@ -14,6 +14,24 @@ async fn unauthorized_automatic_review_exits_before_api_key_validation() {
 }
 
 #[tokio::test]
+async fn write_permission_is_enough_when_configured() {
+    let (base_url, server) = github_server("write");
+    let mut review_args = args(&base_url);
+    review_args.min_permission = "write".to_owned();
+    let error = run(review_args).await.expect_err("missing key");
+    assert!(error.to_string().contains("OPENROUTER_API_KEY"));
+    server.join().expect("server");
+}
+
+#[tokio::test]
+async fn write_permission_is_rejected_when_admin_required() {
+    let (base_url, server) = github_server("write");
+    let result = run(args(&base_url)).await;
+    assert!(result.is_ok());
+    server.join().expect("server");
+}
+
+#[tokio::test]
 async fn authorized_review_requires_api_key_before_repository_fetch() {
     let (base_url, server) = github_server("admin");
     let error = run(args(&base_url)).await.expect_err("missing key");
@@ -84,6 +102,8 @@ fn args(base_url: &str) -> ReviewArgs {
         max_cost_usd: 3.0,
         max_concurrency: 8,
         max_comments: 12,
+        primary_passes: 1,
+        min_permission: "admin".to_owned(),
         engine: "contextual".to_owned(),
         dry_run: false,
         eval_json: false,
