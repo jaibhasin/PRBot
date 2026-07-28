@@ -4,6 +4,8 @@ Current flow: `PR -> one reviewer -> verifier -> comments`.
 
 Deeper analysis: [`competitive_gap_analysis.md`](./competitive_gap_analysis.md).
 
+How to build the do-now items: [`implementation_plan_do_now.md`](./implementation_plan_do_now.md).
+
 ## Do now
 
 - Adjudicate a real eval corpus and gate on precision/recall, not only smoke samples.

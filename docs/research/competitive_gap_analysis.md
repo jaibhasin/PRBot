@@ -4,7 +4,10 @@ Date: 2026-07-28
 
 Scope: PRBot codebase vs CodeRabbit, Cursor Bugbot, Greptile, and GitHub Copilot Code Review.
 
-Related: [`future_checklist.md`](./future_checklist.md)
+Related:
+
+- [`future_checklist.md`](./future_checklist.md)
+- [`implementation_plan_do_now.md`](./implementation_plan_do_now.md)
 
 ## Verdict
 
