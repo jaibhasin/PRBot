@@ -8,14 +8,15 @@ How to build the do-now items: [`implementation_plan_do_now.md`](./implementatio
 
 ## Do now
 
+- [x] Align docs with the live primary+verifier architecture.
+- [x] Retry OpenRouter HTTP 429 and 5xx with `Retry-After` or backoff.
+- [x] Make collaborator permissions configurable (`min_permission`).
+- [x] Enrich the summary comment with a human walkthrough of the change.
+- [x] Let risk level scale depth: tool steps, passes, and budget.
+- [x] Add diversified primary passes with clustering before the verifier (default `primary_passes=1`).
+- [x] Track resolution rate from remembered fingerprints across later commits.
 - Adjudicate a real eval corpus and gate on precision/recall, not only smoke samples.
-- Track resolution rate from remembered fingerprints across later commits and merges.
-- Add 2-3 diversified primary passes with clustering before the verifier.
-- Retry OpenRouter HTTP 429 and 5xx with `Retry-After` or jittered backoff.
-- Align docs with the live primary+verifier architecture (no implied specialist router).
-- Enrich the summary comment with a human walkthrough of the change.
-- Let risk level scale depth: tool steps, passes, and budget, not only prompt text.
-- Make collaborator permissions configurable (`admin` today is too strict for replacement use).
+  Scaffolding landed (`run_fixture_batch.py`, catalog preservation); human labels still required.
 
 ## Later improvements
 

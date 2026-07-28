@@ -3,9 +3,18 @@
 
 ## [Unreleased]
 
+### Added
+- OpenRouter HTTP 429/5xx retries with reserve-once budgeting
+- Configurable collaborator `min_permission` (`admin` default; `maintain`/`write` supported)
+- Risk-scaled review depth and optional multipass primary review with majority merge
+- Human-oriented walkthrough section in the summary comment
+- Resolution-rate tracking across incremental fingerprint lifecycle
+- Fixture batch runner and catalog preservation for adjudicated eval cases
+
 ### Changed
 - Docs and package description align with the live primary reviewer + independent verifier flow
 - Specialist routing remains an eval harness and future option, not the shipped review engine
+- Summary state version is now 4 for resolution-rate fields
 
 ## [1.0.2] - 2026-07-28
 
